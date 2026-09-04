@@ -18,18 +18,19 @@ V.ANSHEE es una solución tecnológica desarrollada como proyecto de perfil de e
 - Contextualización Inteligente: Comprensión semántica de los parámetros del comando para ejecutar tareas multi-paso sin requerir intervención manual constante.
 
 *******************************************************************
-[ Entrada de Audio ] 
-        │
-        ▼
-[ Módulo STT (Speech-to-Text) ] 
-        │
-        ▼
-[ Motor NLP / LLM Parser ] ──(Interpretación de Intención)
-        │
-        ├──────────────────────────────┐
-        ▼                              ▼
-[ Dispatcher de OS ]          [ Engine de Rutinas / ML ]
-(Ejecución sobre Windows)     (Análisis de Patrones y Hábito)
+        [ Entrada de Audio ] 
+                │
+                ▼
+        [ Módulo STT (Speech-to-Text) ] 
+                │
+                ▼
+        [ Motor NLP / LLM Parser ] ──(Interpretación de Intención)
+                                   │
+                    ├──────────────────────────────┐
+                    ▼                              ▼
+        [ Dispatcher de OS ]                  [ Engine de Rutinas / ML ]
+        (Ejecución sobre Windows)             (Análisis de Patrones y Hábito)
+        
 *******************************************************************
 
 
