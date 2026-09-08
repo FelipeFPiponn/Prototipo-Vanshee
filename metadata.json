@@ -1,0 +1,10 @@
+{
+  "name": "V.ANSHEE Core",
+  "description": "Sistema Inteligente de Control por Voz, Procesamiento NLU de Intenciones y Aprendizaje de Rutinas.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
