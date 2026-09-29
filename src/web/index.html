@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BANSHEE | Asistente de Windows</title>
+  <meta name="description" content="Asistente inteligente y automatización para Windows con activación por voz 'Banshee'">
+  <link rel="stylesheet" href="/static/css/vanshee.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
+</head>
+<body>
+  <div class="app-shell">
+    
+    <!-- TOP NAVIGATION -->
+    <header class="navbar">
+      <div class="nav-brand">
+        <div class="brand-icon">⚡</div>
+        <span class="brand-title">BANSHEE</span>
+        <span class="brand-badge">Core v2.5</span>
+      </div>
+
+      <!-- Live Wake Word Status -->
+      <div id="wakeStatusPill" class="wake-status-pill" title="El sistema escucha continuamente tu voz">
+        <span class="status-dot"></span>
+        <span id="wakeStatusText">Escuchando "Banshee"...</span>
+      </div>
+
+      <nav class="nav-links">
+        <button class="nav-link active" data-tab="tab-chat">
+          <span>💬</span> Asistente
+        </button>
+        <button class="nav-link" data-tab="tab-settings">
+          <span>⚙️</span> Configuración
+        </button>
+        <button class="nav-link" data-tab="tab-apps">
+          <span>🚀</span> Aplicaciones
+        </button>
+      </nav>
+    </header>
+
+    <!-- MAIN CONTENT VIEWPORT -->
+    <main class="content-area">
+
+      <!-- TAB 1: ASISTENTE PRINCIPAL -->
+      <section id="tab-chat" class="tab-content active">
+        <div class="chat-container">
+          
+          <div class="assistant-welcome-card">
+            <div id="assistantOrb" class="assistant-avatar" title="Click para hablar o pausar">
+              <span>🎙️</span>
+            </div>
+            <h2>Hola, soy Banshee</h2>
+            <p>Di <strong style="color: var(--primary);">"Banshee"</strong> en cualquier momento o escribe tu instrucción abajo.</p>
+          </div>
+
+          <!-- Messages Stream -->
+          <div id="chatMessages" class="messages-stream">
+            <div class="chat-bubble assistant">
+              ¡Hola! Estoy listo para asistirte en Windows. Puedes pedirme abrir programas, iniciar proyectos de programación, crear archivos o controlar tu entorno.
+            </div>
+          </div>
+
+          <!-- Quick Action Suggestions -->
+          <div class="quick-chips">
+            <button class="chip-btn" data-prompt="Abre Visual Studio Code">💻 Abrir VS Code</button>
+            <button class="chip-btn" data-prompt="Abre el navegador Chrome">🌐 Abrir Navegador</button>
+            <button class="chip-btn" data-prompt="Inicia un proyecto Python llamado mi_app">🐍 Nuevo Proyecto Python</button>
+            <button class="chip-btn" data-prompt="Abre la terminal de Windows">⚙️ Abrir Terminal</button>
+          </div>
+
+          <!-- Bottom Command Bar -->
+          <div class="bottom-input-bar">
+            <input 
+              type="text" 
+              id="userPromptInput" 
+              class="chat-input" 
+              placeholder="Escribe o di 'Banshee' seguido de tu orden..."
+              autocomplete="off"
+            >
+            <button id="btnVoiceToggle" class="btn-input-mic" title="Hablar (o di 'Banshee')">
+              🎙️
+            </button>
+            <button id="btnSendPrompt" class="btn-input-send" title="Enviar">
+              ➔
+            </button>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- TAB 2: CONFIGURACIÓN SIMPLE -->
+      <section id="tab-settings" class="tab-content">
+        <div class="settings-container">
+          
+          <!-- Microfono & Sensibilidad -->
+          <div class="settings-card">
+            <h3><span>🎙️</span> Calibración y Prueba de Micrófono</h3>
+            <p class="card-desc">Selecciona tu micrófono, realiza una prueba de grabación de 3 segundos para escuchar la claridad y volumen de tu voz, y calibra la sensibilidad.</p>
+            
+            <div class="form-group">
+              <label for="micSelect">Micrófono en uso:</label>
+              <select id="micSelect" class="select-control">
+                <option value="">Detectando micrófonos...</option>
+              </select>
+            </div>
+
+            <!-- Boton de Prueba de Audio con Reproduccion -->
+            <div class="form-group" style="margin-top: 14px;">
+              <button id="btnTestMic" class="btn-primary-action" style="width: 100%;">
+                🎙️ Iniciar Prueba de Grabación y Audio (3s)
+              </button>
+              
+              <div class="mic-test-row" style="margin-top: 12px;">
+                <div class="meter-track">
+                  <div id="micMeterFill" class="meter-fill"></div>
+                </div>
+                <span id="micMeterText" class="mic-meter-text">Sin prueba</span>
+              </div>
+            </div>
+
+            <!-- Contenedor de Reproduccion y Diagnostico de Calidad -->
+            <div id="micPlaybackWrap" class="mic-playback-wrap" style="display: none;">
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <strong style="font-size: 13px; color: var(--text-primary);">🔊 Audio grabado (así te escucha Banshee):</strong>
+                <span id="micQualityBadge" style="font-size: 11px; padding: 2px 8px; border-radius: 12px; background: rgba(34, 197, 94, 0.2); color: var(--success); font-weight: 600;">Calidad óptima</span>
+              </div>
+              <audio id="micAudioPlayer" controls style="width: 100%; height: 36px;"></audio>
+              <div id="micAdviceBox" class="mic-advice-box"></div>
+              <button id="btnApplyRecommended" class="btn-test" style="width: 100%; color: var(--primary); border-color: var(--primary); margin-top: 4px;">
+                ⚡ Aplicar Sensibilidad Recomendada
+              </button>
+            </div>
+
+            <!-- Slider de Sensibilidad -->
+            <div class="form-group" style="margin-top: 18px;">
+              <div style="display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 6px;">
+                <span>Sensibilidad del micrófono (Umbral RMS):</span>
+                <strong id="thresholdDisplay" style="color: var(--primary);">100 RMS</strong>
+              </div>
+              <input type="range" id="thresholdSlider" class="slider-control" min="30" max="300" step="5" value="100">
+              <small style="color: var(--text-muted); display: block; margin-top: 4px;">
+                Valores entre 70 y 100 RMS son ideales para hablar con volumen normal. Desliza hacia la izquierda si quieres mayor sensibilidad.
+              </small>
+            </div>
+          </div>
+
+          <!-- Voz de la IA -->
+          <div class="settings-card">
+            <h3><span>🗣️</span> Voz de la Asistente</h3>
+            <p class="card-desc">Personaliza la voz con la que Banshee te responde. Usamos voces neuronales humanas de alta fidelidad.</p>
+            
+            <div class="form-group">
+              <label for="voiceSelect">Voz seleccionada:</label>
+              <select id="voiceSelect" class="select-control">
+                <option value="es-ES-ElviraNeural">Elvira (España - Femenina, Muy Natural)</option>
+                <option value="es-MX-DaliaNeural">Dalia (México - Femenina, Cálida)</option>
+                <option value="es-ES-AlvaroNeural">Álvaro (España - Masculino, Formal)</option>
+                <option value="es-MX-JorgeNeural">Jorge (México - Masculino, Fluido)</option>
+                <option value="es-AR-TomasNeural">Tomás (Argentina - Masculino)</option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <button id="btnTestVoice" class="btn-test" style="width: 100%;">
+                ▶ Escuchar Voz de Prueba
+              </button>
+            </div>
+
+            <div class="switch-row" style="margin-top: 10px; border-top: 1px solid var(--border-card); padding-top: 12px;">
+              <div class="switch-info">
+                <h4>Respuestas con voz hablada</h4>
+                <p>Si está desactivado, Banshee responderá solo con texto en la pantalla.</p>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="ttsToggle" checked>
+                <span class="slider-round"></span>
+              </label>
+            </div>
+          </div>
+
+          <!-- Palabra de Activación -->
+          <div class="settings-card">
+            <h3><span>⚡</span> Activación por Voz ("Banshee")</h3>
+            <p class="card-desc">Controla la escucha automática sin necesidad de tocar ningún botón.</p>
+            
+            <div class="switch-row">
+              <div class="switch-info">
+                <h4>Activar con la palabra "Banshee"</h4>
+                <p>Banshee escuchará continuamente en segundo plano y responderá al oír su nombre.</p>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="wakeWordToggle" checked>
+                <span class="slider-round"></span>
+              </label>
+            </div>
+          </div>
+
+          <!-- Inicio Automático con Windows -->
+          <div class="settings-card">
+            <h3><span>🚀</span> Inicio del Sistema</h3>
+            <p class="card-desc">Haz que Banshee esté lista desde el momento en que enciendes tu computadora.</p>
+            
+            <div class="switch-row">
+              <div class="switch-info">
+                <h4>Iniciar Banshee al encender la computadora</h4>
+                <p>Se ejecutará automáticamente en segundo plano al iniciar sesión en Windows.</p>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="autostartToggle">
+                <span class="slider-round"></span>
+              </label>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- TAB 3: MIS APLICACIONES -->
+      <section id="tab-apps" class="tab-content">
+        <div class="apps-container">
+          <div class="apps-search-wrap">
+            <input type="text" id="appSearchInput" class="apps-search-input" placeholder="🔍 Buscar entre las aplicaciones de tu equipo...">
+          </div>
+          
+          <div id="simpleAppsList" class="simple-apps-grid">
+            <!-- Dynamically populated app cards -->
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <div id="toastBox" class="toast-box" style="display: none;"></div>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>

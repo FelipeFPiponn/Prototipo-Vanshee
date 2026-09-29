@@ -1,0 +1,28 @@
+# Python bytecode and cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Environment files
+.env
+.env.local
+
+# Temporary audio files and test data
+data/*.mp3
+data/*.wav
+data/test_context/
+
+# IDE and OS
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
+*.tmp
+*.log
