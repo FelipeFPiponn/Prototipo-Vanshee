@@ -38,6 +38,13 @@ class WindowManager:
     TARGET_ALIASES = {
         "spotify": {"keywords": ["spotify"], "processes": ["spotify.exe", "spotify"]},
         "youtube": {"keywords": ["youtube"], "processes": []},
+        "antigravity": {"keywords": ["antigravity", "vanshee"], "processes": ["antigravity.exe"]},
+        "cursor": {"keywords": ["cursor"], "processes": ["cursor.exe"]},
+        "claude": {"keywords": ["claude"], "processes": ["claude.exe"]},
+        "codex": {"keywords": ["codex", "visual studio code", " - code"], "processes": ["code.exe"]},
+        "opencode": {"keywords": ["opencode", "code"], "processes": []},
+        "windsurf": {"keywords": ["windsurf"], "processes": ["windsurf.exe"]},
+        "chatgpt": {"keywords": ["chatgpt"], "processes": ["chatgpt.exe"]},
         "vscode": {"keywords": ["visual studio code", " - code"], "processes": ["code.exe", "code"]},
         "vs code": {"keywords": ["visual studio code", " - code"], "processes": ["code.exe", "code"]},
         "code": {"keywords": ["visual studio code", " - code"], "processes": ["code.exe", "code"]},
@@ -226,3 +233,67 @@ class WindowManager:
         except Exception as e:
             print(f"[WindowManager Error] Falló al navegar en pestaña activa: {e}")
             return False
+
+    def type_and_send_prompt(self, text: str, target_hint: str = "", press_enter: bool = True) -> bool:
+        """Escribe un prompt en el agente de código o chat activo y opcionalmente pulsa Enter."""
+        if not text:
+            return False
+        clean_text = text.strip()
+
+        # 1. Si hay un target_hint específico de app/agente, enfocar la ventana correspondiente
+        target_clean = target_hint.lower().strip()
+        coding_agents = ["antigravity", "cursor", "claude", "vscode", "vs code", "code", "codex", "opencode", "windsurf", "chatgpt"]
+        
+        target_to_focus = None
+        if target_clean in coding_agents:
+            target_to_focus = target_clean
+        else:
+            for agent in coding_agents:
+                if agent in target_clean:
+                    target_to_focus = agent
+                    break
+
+        if target_to_focus:
+            focused, title = self.find_and_focus(target_to_focus)
+            if focused:
+                print(f"[WindowManager] Ventana de agente enfocada: '{title}'")
+                time.sleep(0.18)
+
+        # 2. Obtener contexto de la ventana activa para saber si es un IDE con chat
+        active_title = ""
+        if win32gui:
+            try:
+                hwnd = win32gui.GetForegroundWindow()
+                if hwnd:
+                    active_title = win32gui.GetWindowText(hwnd).lower()
+            except Exception:
+                pass
+
+        is_ide_agent = any(k in active_title or k in target_clean for k in ["antigravity", "cursor", "code", "visual studio", "windsurf", "opencode"])
+
+        if pyautogui is not None:
+            # 3. Si es un IDE/agente de código (Antigravity, Cursor, VS Code, etc.),
+            # enviar Ctrl+L para situar el foco en el panel/caja de prompt del agente
+            if is_ide_agent:
+                print("[WindowManager] Enviando Ctrl+L para enfocar la caja de prompt del agente...")
+                pyautogui.hotkey("ctrl", "l")
+                time.sleep(0.15)
+
+            # 4. Copiar texto al portapapeles y pegar con Ctrl+V (soporta acentos, código y saltos de línea)
+            if pyperclip:
+                pyperclip.copy(clean_text)
+            else:
+                import subprocess
+                subprocess.run(["clip"], input=clean_text.encode("utf-8"), check=True)
+
+            time.sleep(0.08)
+            pyautogui.hotkey("ctrl", "v")
+            time.sleep(0.12)
+
+            # 5. Presionar Enter para enviar el prompt si se solicita
+            if press_enter:
+                print("[WindowManager] Enviando tecla Enter para enviar el prompt...")
+                pyautogui.press("enter")
+
+            return True
+        return False

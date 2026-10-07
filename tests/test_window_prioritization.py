@@ -82,8 +82,8 @@ class TestWindowPrioritizationAndSearchRegistry(unittest.TestCase):
             self.assertTrue(success)
             self.assertIn("Spotify", msg)
             self.assertIn("Lana del Rey", msg)
-            # Debe invocar os.startfile con espacios limpios (sin '+' ni '%20') y sin 'canciones de'
-            mock_startfile.assert_called_once_with("spotify:search:Lana del Rey")
+            # Debe invocar os.startfile con query codificada para evitar cortes en Windows
+            mock_startfile.assert_called_once_with("spotify:search:Lana%20del%20Rey")
             # NO debe abrir pestaña de navegador
             mock_browser.assert_not_called()
 
@@ -95,7 +95,7 @@ class TestWindowPrioritizationAndSearchRegistry(unittest.TestCase):
         mock_wm.focus_window.return_value = True
         mock_wm.navigate_active_browser_tab.return_value = True
 
-        with patch("webbrowser.open_new_tab") as mock_browser:
+        with patch("webbrowser.open_new_tab") as mock_browser, patch.object(self.registry, "_resolve_direct_youtube_video", return_value=None):
             success, msg = self.registry.dispatch_search(
                 target="youtube",
                 query="videos de Monster Hunter",
@@ -138,7 +138,7 @@ class TestWindowPrioritizationAndSearchRegistry(unittest.TestCase):
             self.assertTrue(success)
             self.assertIn("Spotify", executor.last_action_message)
             self.assertIn("Imagine Dragons", executor.last_action_message)
-            mock_startfile.assert_called_once_with("spotify:search:Imagine Dragons")
+            mock_startfile.assert_called_once_with("spotify:search:Imagine%20Dragons")
             mock_browser.assert_not_called()
 
     def test_09_intent_parser_fast_search_query_cleaning(self):
@@ -157,6 +157,63 @@ class TestWindowPrioritizationAndSearchRegistry(unittest.TestCase):
         self.assertEqual(p2.steps[0].intent, "SEARCH_CONTENT")
         self.assertEqual(p2.steps[0].target, "youtube")
         self.assertEqual(p2.steps[0].parameters.content, "Monster Hunter")
+
+    def test_10_solotodo_direct_and_lucky_search(self):
+        """Verifica la navegación directa a SoloTodo y redirección I'm Feeling Lucky en Google."""
+        with patch("webbrowser.open_new_tab") as mock_browser:
+            # Búsqueda de servicio web directo conocido
+            success, msg = self.registry.dispatch_search(
+                target="google",
+                query="solotodo",
+                window_manager=self.wm
+            )
+            self.assertTrue(success)
+            mock_browser.assert_called_with("https://www.solotodo.cl")
+
+            # Búsqueda general con solicitud explícita de abrir el primer resultado
+            mock_browser.reset_mock()
+            success2, msg2 = self.registry.dispatch_search(
+                target="google",
+                query="noticias espaciales james webb y abre el primer link",
+                window_manager=self.wm,
+                raw_text="busca noticias espaciales james webb en el navegador y abre el primer link"
+            )
+            self.assertTrue(success2)
+            mock_browser.assert_called_with("https://www.google.com/search?q=noticias%20espaciales%20james%20webb&btnI=1")
+
+
+    def test_11_interact_screen_contextual_follow_up(self):
+        """Verifica que 'abre el primer link' o 'reproduce la primera canción' usen la búsqueda previa."""
+        executor = OSExecutor()
+        
+        # 1. Simular búsqueda previa en Google
+        executor.search_registry.dispatch_search(target="google", query="solotodo", window_manager=self.wm)
+        self.assertIsNotNone(executor.search_registry.last_search)
+        self.assertEqual(executor.search_registry.last_search["clean_query"], "solotodo")
+
+        # 2. Comando de seguimiento: "abre el primer link"
+        from src.nlu.intent_parser import IntentParser
+        parser = IntentParser()
+        p_follow = parser.parse("abre el primer link")
+        self.assertEqual(p_follow.steps[0].intent, "INTERACT_SCREEN")
+        self.assertEqual(p_follow.steps[0].target, "open_first_link")
+
+        with patch("webbrowser.open_new_tab") as mock_browser:
+            success = executor.execute_pipeline(p_follow)
+            self.assertTrue(success)
+            self.assertIn("solotodo", executor.last_action_message.lower())
+            mock_browser.assert_called_with("https://www.solotodo.cl")
+
+        # 3. Simular búsqueda previa en YouTube y seguimiento: "reproduce el primer video"
+        executor.search_registry.dispatch_search(target="youtube", query="Warframe", window_manager=self.wm)
+        p_play = parser.parse("reproduce el primer video")
+        self.assertEqual(p_play.steps[0].intent, "INTERACT_SCREEN")
+        self.assertEqual(p_play.steps[0].target, "play_first")
+
+        with patch("webbrowser.open_new_tab") as mock_browser, patch.object(executor.search_registry, "_resolve_direct_youtube_video", return_value="https://www.youtube.com/watch?v=mock123"):
+            success_play = executor.execute_pipeline(p_play)
+            self.assertTrue(success_play)
+            self.assertIn("Warframe", executor.last_action_message)
 
 
 if __name__ == "__main__":

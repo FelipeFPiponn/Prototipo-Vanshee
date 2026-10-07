@@ -5,30 +5,45 @@ from config.settings import settings
 from src.executor.app_indexer import AppIndexer
 from src.routines.db import init_db
 
+import re
+import urllib.parse
+from src.executor.steam_indexer import SteamIndexer
+
 WEB_SERVICES = {
+    # Búsqueda y hardware / e-commerce
+    "solotodo": "https://www.solotodo.cl",
+    "solo todo": "https://www.solotodo.cl",
+    "solotodo.cl": "https://www.solotodo.cl",
+    "pcfactory": "https://www.pcfactory.cl",
+    "pc factory": "https://www.pcfactory.cl",
+    "spdigital": "https://www.spdigital.cl",
+    "sp digital": "https://www.spdigital.cl",
+    "mercadolibre": "https://www.mercadolibre.cl",
+    "mercado libre": "https://www.mercadolibre.cl",
+    "amazon": "https://www.amazon.com",
+    "aliexpress": "https://www.aliexpress.com",
+    # IA y Productividad
     "chatgpt": "https://chatgpt.com",
     "chat gpt": "https://chatgpt.com",
     "claude": "https://claude.ai",
+    "deepseek": "https://chat.deepseek.com",
+    "notion": "https://www.notion.so",
+    "canva": "https://www.canva.com",
+    # Redes y Multimedia
     "youtube": "https://youtube.com",
     "github": "https://github.com",
-    "gmail": "https://mail.google.com"
-}
-
-import urllib.parse
-
-STEAM_GAMES = {
-    "cs2": "steam://rungameid/730",
-    "cs 2": "steam://rungameid/730",
-    "counter strike": "steam://rungameid/730",
-    "counter strike 2": "steam://rungameid/730",
-    "counter-strike 2": "steam://rungameid/730",
-    "dota 2": "steam://rungameid/570",
-    "dota": "steam://rungameid/570",
-    "pubg": "steam://rungameid/578080",
-    "apex": "steam://rungameid/1172470",
-    "apex legends": "steam://rungameid/1172470",
-    "gta v": "steam://rungameid/271590",
-    "gta 5": "steam://rungameid/271590",
+    "gmail": "https://mail.google.com",
+    "twitch": "https://www.twitch.tv",
+    "reddit": "https://www.reddit.com",
+    "twitter": "https://twitter.com",
+    "x": "https://x.com",
+    "instagram": "https://www.instagram.com",
+    "facebook": "https://www.facebook.com",
+    "whatsapp": "https://web.whatsapp.com",
+    "whatsapp web": "https://web.whatsapp.com",
+    "netflix": "https://www.netflix.com",
+    "spotify": "https://open.spotify.com",
+    "wikipedia": "https://es.wikipedia.org",
 }
 
 class DynamicResolver:
@@ -36,6 +51,7 @@ class DynamicResolver:
         self.db_path = settings.DB_PATH
         init_db()
         self.indexer = AppIndexer()
+        self.steam_indexer = self.indexer.steam_indexer
 
     def get_learned_command(self, keyword: str) -> str | None:
         conn = sqlite3.connect(self.db_path)
@@ -73,9 +89,10 @@ class DynamicResolver:
     def resolve(self, target: str) -> tuple[str | None, str]:
         target_clean = target.lower().strip()
 
-        # 0. Juegos de Steam conocidos por obviedad
-        if target_clean in STEAM_GAMES:
-            return STEAM_GAMES[target_clean], "protocol"
+        # 0. Juegos de Steam detectados dinámicamente
+        steam_game = self.steam_indexer.find_game(target_clean)
+        if steam_game:
+            return steam_game["uri"], "protocol"
 
         # Búsquedas inteligentes en YouTube / Google por obviedad
         if "youtube" in target_clean and len(target_clean) > 7:
@@ -90,18 +107,36 @@ class DynamicResolver:
                 encoded_q = urllib.parse.quote(query)
                 return f"https://www.google.com/search?q={encoded_q}", "url"
 
+        # Normalización de prefijos como 'la pagina de', 'el sitio de', 'la web de'
+        clean_name = re.sub(r"^(?:la\s+|el\s+)?(?:pagina|página|web|sitio|portal)\s+(?:de\s+|web\s+de\s+)?", "", target_clean).strip()
+
+        # Servicios Web conocidos
         if target_clean in WEB_SERVICES:
             return WEB_SERVICES[target_clean], "url"
+        if clean_name in WEB_SERVICES:
+            return WEB_SERVICES[clean_name], "url"
 
-        # 1. Buscar en aplicaciones locales indexadas primero
+        # 1. Buscar en aplicaciones locales indexadas primero (.lnk, .exe, .url)
         local_path = self.indexer.find_app(target_clean)
+        if not local_path and clean_name != target_clean:
+            local_path = self.indexer.find_app(clean_name)
+
         if local_path:
+            if local_path.startswith("steam://") or "://" in local_path and not local_path.startswith("http"):
+                return local_path, "protocol"
+            if local_path.startswith("http://") or local_path.startswith("https://"):
+                return local_path, "url"
             return local_path, "app"
 
         # 2. Buscar en comandos aprendidos previamente en DB
-        learned = self.get_learned_command(target_clean)
+        learned = self.get_learned_command(target_clean) or self.get_learned_command(clean_name)
         if learned:
-            cmd_type = "url" if learned.startswith("http") else "app"
+            if learned.startswith("http://") or learned.startswith("https://"):
+                cmd_type = "url"
+            elif "://" in learned:
+                cmd_type = "protocol"
+            else:
+                cmd_type = "app"
             return learned, cmd_type
 
         return self._infer_with_llm(target_clean)

@@ -18,13 +18,13 @@ class VoiceDialog:
         import time
         time.sleep(0.4)
 
-        # 2. Escuchar la respuesta del usuario en Pausa Activa con VAD
+        # 2. Escuchar la respuesta del usuario en Pausa Activa con Silero VAD
         print("\n[V.ANSHEE 🎙️ Pausa Activa: Esperando respuesta por voz...]")
         recorder = AudioRecorder(max_wait_sec=listen_seconds)
-        audio_file = recorder.record()
+        audio_array = recorder.record_array()
 
-        # 3. Transcribir la respuesta con Whisper
-        transcription = self.stt.transcribe(audio_file)
+        # 3. Transcribir la respuesta con Whisper directamente en memoria
+        transcription = self.stt.transcribe(audio_array)
         print(f"[Tu respuesta por voz]: '{transcription}'")
         return transcription.strip()
 

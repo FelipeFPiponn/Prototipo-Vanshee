@@ -2,6 +2,7 @@ import os
 import sys
 import site
 import wave
+from pathlib import Path
 import numpy as np
 
 def _setup_cuda_dlls():
@@ -62,59 +63,71 @@ class WhisperSTT:
             self.current_model = size
             self.current_device = device
 
-    def transcribe(self, audio_path: str) -> str:
-        # 1. Verificar duración mínima para evitar procesar archivos vacíos
-        try:
-            with wave.open(audio_path, "rb") as wf:
-                n_frames = wf.getnframes()
-                sample_rate = wf.getframerate()
-                duration = n_frames / float(sample_rate) if sample_rate > 0 else 0
-
-                # Descartar audios menores a 300 ms
-                if duration < 0.3:
-                    return ""
-
-                frames = wf.readframes(n_frames)
-                audio_data = np.frombuffer(frames, dtype=np.int16)
-                max_amp = float(np.max(np.abs(audio_data)))
-                
-                # Descartar únicamente si es silencio absoluto digital (amplitud despreciable)
-                if max_amp < 50.0:
-                    return ""
-        except Exception as e:
-            print(f"[STT Pre-check Error]: {e}")
-            return ""
-
-        # 2. Prompt de contexto para que Whisper reconozca 'Banshee' y nombres de aplicaciones sin alucinar
+    def transcribe(self, audio_input: str | Path | np.ndarray) -> str:
+        """Transcribe audio desde una ruta de archivo .wav o directamente desde un array numpy en memoria RAM."""
+        # 1. Normalización de entrada y verificación de duración
+        audio_data = None
         prompt = "Banshee, asistente de voz para Windows. Comandos: abrir, cerrar, buscar, ejecutar, YouTube, Brave, Chrome, VS Code."
 
+        if isinstance(audio_input, np.ndarray):
+            if audio_input.dtype == np.int16:
+                audio_data = audio_input.astype(np.float32) / 32768.0
+            else:
+                audio_data = audio_input.astype(np.float32)
+
+            duration = len(audio_data) / 16000.0
+            if duration < 0.25:
+                return ""
+            if float(np.max(np.abs(audio_data))) < 0.002:
+                return ""
+            transcribe_target = audio_data
+        else:
+            audio_path = str(audio_input)
+            try:
+                with wave.open(audio_path, "rb") as wf:
+                    n_frames = wf.getnframes()
+                    sample_rate = wf.getframerate()
+                    duration = n_frames / float(sample_rate) if sample_rate > 0 else 0
+
+                    if duration < 0.25:
+                        return ""
+
+                    frames = wf.readframes(n_frames)
+                    audio_raw = np.frombuffer(frames, dtype=np.int16)
+                    if float(np.max(np.abs(audio_raw))) < 50.0:
+                        return ""
+            except Exception as e:
+                print(f"[STT Pre-check Error]: {e}")
+                return ""
+            transcribe_target = audio_path
+
+        # 2. Inferencia con Faster-Whisper
         try:
-            # vad_filter=True usa Silero VAD para descartar partes que no sean voz humana
             segments, _ = self.model.transcribe(
-                audio_path,
+                transcribe_target,
                 language="es",
                 initial_prompt=prompt,
                 vad_filter=True,
                 vad_parameters=dict(
                     threshold=0.35,
-                    min_silence_duration_ms=450,
-                    speech_pad_ms=250
+                    min_silence_duration_ms=300,
+                    speech_pad_ms=200
                 )
             )
             text = " ".join([segment.text for segment in segments]).strip()
         except Exception as e:
-            # Si falla en GPU durante la inferencia (ej: DLL faltante), conmutar a CPU automáticamente
+            # Fallback automático a CPU
             if self.current_device == "cuda":
                 print(f"[STT Warning] Inferencia en CUDA falló: {e}. Conmutando permanentemente a CPU (int8)...")
                 try:
                     self.model = WhisperModel(self.current_model, device="cpu", compute_type="int8")
                     self.current_device = "cpu"
                     segments, _ = self.model.transcribe(
-                        audio_path,
+                        transcribe_target,
                         language="es",
                         initial_prompt=prompt,
                         vad_filter=True,
-                        vad_parameters=dict(threshold=0.35, min_silence_duration_ms=450, speech_pad_ms=250)
+                        vad_parameters=dict(threshold=0.35, min_silence_duration_ms=300, speech_pad_ms=200)
                     )
                     return " ".join([segment.text for segment in segments]).strip()
                 except Exception as ex2:
@@ -123,7 +136,7 @@ class WhisperSTT:
             print(f"[STT Transcribe Error]: {e}")
             return ""
 
-        # 3. Filtrar alucinaciones comunes de Whisper en audio ruidoso o silencioso
+        # 3. Filtrar alucinaciones comunes
         hallucination_phrases = {
             "subtítulos realizados por",
             "comunidad de amara.org",

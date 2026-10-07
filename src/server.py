@@ -27,6 +27,7 @@ from src.audio.tts_engine import TTSEngine
 from src.audio.wake_word import WakeWordDetector
 from src.utils.autostart import is_autostart_enabled, set_autostart
 from src.nlu.intent_parser import ParsedPipeline, ActionStep, StepParameters
+from src.integrations.editor_hub import editor_hub
 
 app = FastAPI(title="V.ANSHEE Core Assistant Console", version="2.5.0")
 
@@ -607,21 +608,43 @@ async def list_apps(query: str = ""):
     indexer = get_app_indexer()
     q = query.lower().strip()
     apps = []
+    seen_paths = set()
 
+    # 1. Primero agregar los juegos oficiales de Steam
+    if hasattr(indexer, "steam_indexer") and indexer.steam_indexer:
+        for appid, game in indexer.steam_indexer.games.items():
+            g_name = game["name"]
+            g_uri = game["uri"]
+            if q and q not in g_name.lower() and q not in g_uri.lower():
+                continue
+            seen_paths.add(g_uri)
+            apps.append({
+                "name": g_name,
+                "target": g_name.lower(),
+                "path": g_uri,
+                "category": "gaming"
+            })
+
+    # 2. Agregar aplicaciones locales indexadas (evitando duplicados por alias)
     for name, path in indexer.app_index.items():
+        if path in seen_paths:
+            continue
         if q and q not in name and q not in path.lower():
             continue
 
+        seen_paths.add(path)
         category = "utility"
         name_lower = name.lower()
-        if any(w in name_lower for w in ["code", "visual studio", "pycharm", "git", "terminal", "sublime", "notepad++"]):
+        path_lower = path.lower()
+
+        if path_lower.startswith("steam://") or any(w in name_lower for w in ["steam", "epic", "game", "discord", "xbox", "riot"]):
+            category = "gaming"
+        elif any(w in name_lower for w in ["code", "visual studio", "pycharm", "git", "terminal", "sublime", "notepad++"]):
             category = "developer"
         elif any(w in name_lower for w in ["chrome", "edge", "firefox", "brave", "opera"]):
             category = "browser"
         elif any(w in name_lower for w in ["spotify", "vlc", "media", "music", "audio", "video"]):
             category = "media"
-        elif any(w in name_lower for w in ["steam", "epic", "game", "discord", "xbox"]):
-            category = "gaming"
         elif any(w in name_lower for w in ["panel", "configuraci", "settings", "powershell", "cmd", "regedit", "task"]):
             category = "system"
 
@@ -683,6 +706,92 @@ async def websocket_endpoint(websocket: WebSocket):
     except Exception:
         if websocket in state.active_connections:
             state.active_connections.remove(websocket)
+
+@app.websocket("/ws/editor")
+async def editor_websocket_endpoint(websocket: WebSocket):
+    """Canal WebSocket bidireccional de baja latencia para extensiones de IDE (Antigravity, VS Code, Cursor)."""
+    await websocket.accept()
+    session_id = f"session_{int(time.time()*1000)}_{id(websocket)}"
+    try:
+        while True:
+            raw_msg = await websocket.receive_text()
+            try:
+                msg = json.loads(raw_msg)
+            except json.JSONDecodeError:
+                continue
+
+            msg_type = msg.get("type", "")
+            method = msg.get("method", "")
+
+            # 1. Registro inicial de la extensión del editor
+            if msg_type == "register" or method == "register":
+                editor_name = msg.get("editor_name") or msg.get("params", {}).get("editor_name", "editor")
+                metadata = msg.get("metadata") or msg.get("params", {})
+                editor_hub.register_session(
+                    session_id=session_id,
+                    editor_name=editor_name,
+                    ws=websocket,
+                    metadata=metadata
+                )
+                await websocket.send_json({
+                    "jsonrpc": "2.0",
+                    "id": msg.get("id", "init"),
+                    "result": {"status": "connected", "session_id": session_id}
+                })
+
+            # 2. Actualización de contexto activo desde el IDE
+            elif msg_type == "context_update" or method == "context_update":
+                context_data = msg.get("data") or msg.get("params", {})
+                editor_hub.update_session_context(session_id, context_data)
+
+            # 3. Respuesta a una llamada RPC iniciada por V.ANSHEE
+            elif "id" in msg and ("result" in msg or "error" in msg):
+                editor_hub.handle_rpc_response(msg)
+
+            # 4. Ping / Heartbeat
+            elif msg.get("method") == "ping" or msg_type == "ping":
+                await websocket.send_json({"jsonrpc": "2.0", "id": msg.get("id"), "result": "pong"})
+
+    except WebSocketDisconnect:
+        editor_hub.unregister_session(session_id)
+    except Exception as e:
+        print(f"[Server WS Editor Error] {e}")
+        editor_hub.unregister_session(session_id)
+
+# Endpoints REST para inspección y control de editores
+@app.get("/api/editor/sessions")
+async def list_editor_sessions():
+    """Retorna las sesiones activas de editores de código conectados."""
+    sessions = []
+    for s in editor_hub.sessions.values():
+        sessions.append({
+            "session_id": s.session_id,
+            "editor_name": s.editor_name,
+            "workspace_root": s.workspace_root,
+            "active_file": s.active_file,
+            "language_id": s.language_id,
+            "cursor_line": s.cursor_line,
+            "cursor_column": s.cursor_column,
+            "connected_at": s.connected_at
+        })
+    return {"total": len(sessions), "sessions": sessions}
+
+@app.post("/api/editor/send_prompt")
+async def editor_send_prompt(req: dict):
+    prompt = req.get("prompt", "")
+    editor_hint = req.get("editor_hint", "")
+    if not prompt:
+        raise HTTPException(status_code=400, detail="El prompt no puede estar vacío.")
+    success = editor_hub.send_prompt(prompt, editor_hint=editor_hint)
+    return {"success": success, "prompt": prompt}
+
+@app.post("/api/editor/insert_code")
+async def editor_insert_code(req: dict):
+    code = req.get("code", "")
+    file_path = req.get("file_path", "")
+    editor_hint = req.get("editor_hint", "")
+    success = editor_hub.insert_code(code, file_path=file_path, editor_hint=editor_hint)
+    return {"success": success}
 
 # Static files & Web UI
 web_dir = Path(__file__).resolve().parent / "web"

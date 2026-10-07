@@ -13,6 +13,8 @@ from src.audio.tts_engine import TTSEngine
 from src.audio.voice_dialog import VoiceDialog
 from src.executor.window_manager import WindowManager
 from src.executor.search_registry import SearchProviderRegistry
+from src.executor.editor_adapter import EditorAdapter
+from src.integrations.integration_router import integration_router, IntegrationRouter
 from src.utils.query_cleaner import clean_search_term
 
 class OSExecutor:
@@ -24,6 +26,8 @@ class OSExecutor:
         self.interactive_voice = settings.ENABLE_VOICE_VERIFICATION if interactive_voice is None else interactive_voice
         self.window_manager = WindowManager()
         self.search_registry = SearchProviderRegistry()
+        self.editor_adapter = EditorAdapter(window_manager=self.window_manager)
+        self.integration_router = integration_router
         self.screen_mapper = ScreenMapper()
         self.context_engine = ContextAwarenessEngine(screen_mapper=self.screen_mapper)
         self.last_action_message = ""
@@ -54,7 +58,7 @@ class OSExecutor:
                 filtered_steps.append(s)
             pipeline.steps = filtered_steps
 
-        # Optimización de pipeline: Evitar abrir una página vacía si también se va a realizar una búsqueda en ella
+        # Optimización de pipeline: Evitar abrir una página vacía o enviar señales multimedia si se va a realizar una búsqueda/reproducción de contenido
         has_search = any("SEARCH" in s.intent.upper() for s in pipeline.steps)
         if has_search:
             search_targets = {
@@ -65,7 +69,10 @@ class OSExecutor:
                 if "OPEN_APP" in s.intent.upper() and any(st in s.target.lower() for st in search_targets):
                     print(f"[OSExecutor Optimización] Omitiendo apertura de página inicial de '{s.target}' (se abrirá directamente con la búsqueda).")
                     continue
-                if "FORGET" in s.intent.upper() and ("busca" in pipeline.raw_text.lower() or "youtube" in pipeline.raw_text.lower()):
+                if "FORGET" in s.intent.upper() and ("busca" in pipeline.raw_text.lower() or "youtube" in pipeline.raw_text.lower() or "spotify" in pipeline.raw_text.lower()):
+                    continue
+                if "MEDIA" in s.intent.upper() and ("busca" in pipeline.raw_text.lower() or "youtube" in pipeline.raw_text.lower() or "reproduce" in pipeline.raw_text.lower()):
+                    print(f"[OSExecutor Optimización] Omitiendo MEDIA_CONTROL en pipeline de búsqueda/reproducción para no interferir con la música de fondo.")
                     continue
                 filtered_steps.append(s)
             pipeline.steps = filtered_steps
@@ -104,6 +111,28 @@ class OSExecutor:
             self.last_action_message = msg
             return success
 
+        # Integraciones directas de alta velocidad (Spotify, Valorant, League of Legends, Discord, OBS, Audio Mixer, Hardware, Obsidian)
+        elif any(intent.startswith(p) for p in ["SPOTIFY_", "VALORANT_", "LOL_", "DISCORD_", "OBS_", "OBSIDIAN_", "HARDWARE_", "AUDIO_", "SET_APP_VOLUME", "SET_VOLUME_PCT", "MUTE_APP", "UNMUTE_APP"]):
+            vol_val = 50.0
+            if step.parameters.content.isdigit():
+                vol_val = float(step.parameters.content)
+            params_dict = {
+                "content": step.parameters.content,
+                "volume": vol_val
+            }
+            success, msg = self.integration_router.execute_direct_action(
+                action_type=intent,
+                target=target,
+                params=params_dict
+            )
+            self.last_action_message = msg
+            print(f"[OSExecutor Integración Directa] {msg}")
+            self.tts.speak(msg)
+            return success
+
+        elif "MEDIA" in intent or intent == "MEDIA_CONTROL":
+            return self._handle_media_control(step)
+
         elif "SEARCH" in intent or intent == "SEARCH_CONTENT":
             return self._search_content(step)
 
@@ -123,6 +152,9 @@ class OSExecutor:
         elif "WRITE_TEXT" in intent or intent == "WRITE_TEXT":
             return self._write_contextual_text(step)
 
+        elif "INTERACT" in intent or intent in ["INTERACT_SCREEN", "SCREEN_INTERACT", "CLICK_FIRST"]:
+            return self._handle_screen_interaction(step)
+
         elif "SYSTEM_CONTROL" in intent or intent == "SYSTEM_CONTROL":
             if target:
                 return self._launch_target(target)
@@ -132,6 +164,78 @@ class OSExecutor:
         print(f"[OSExecutor Error] Intent no reconocido o no soportado: '{step.intent}'")
         self.last_action_message = f"Instrucción no soportada: {step.intent}"
         return False
+
+    def _handle_screen_interaction(self, step: ActionStep) -> bool:
+        action_type = step.target.lower().strip() or "open_first_link"
+        success, msg = self.search_registry.open_first_result_of_last_search(
+            action_type=action_type,
+            window_manager=self.window_manager
+        )
+        self.last_action_message = msg
+        print(f"[OSExecutor Pantalla] {msg}")
+        return success
+
+    def _send_media_key(self, key_code: int, pyautogui_name: str) -> bool:
+        """Envía una señal multimedia global de Windows a cualquier reproductor activo."""
+        try:
+            import pyautogui
+            pyautogui.press(pyautogui_name)
+            return True
+        except Exception:
+            try:
+                import ctypes
+                ctypes.windll.user32.keybd_event(key_code, 0, 0, 0)
+                ctypes.windll.user32.keybd_event(key_code, 0, 2, 0)  # KEYEVENTF_KEYUP
+                return True
+            except Exception as e:
+                print(f"[OSExecutor MediaKey Error] {e}")
+                return False
+
+    def _handle_media_control(self, step: ActionStep) -> bool:
+        """Ejecuta acciones multimedia nativas globales en Windows (Play/Pausa, Siguiente, Mute, Volumen)."""
+        action = step.target.lower().strip()
+        if action in ["pause", "pausa", "pausar", "detener", "stop", "play_pause", "playpause"]:
+            self._send_media_key(0xB3, "playpause")
+            self.last_action_message = "Música / reproducción pausada."
+            print(f"[OSExecutor] {self.last_action_message}")
+            return True
+        elif action in ["play", "reproducir", "reanudar", "resume", "continuar"]:
+            self._send_media_key(0xB3, "playpause")
+            self.last_action_message = "Reanudando reproducción."
+            print(f"[OSExecutor] {self.last_action_message}")
+            return True
+        elif action in ["next", "siguiente", "skip", "avanzar"]:
+            self._send_media_key(0xB0, "nexttrack")
+            self.last_action_message = "Siguiente pista."
+            print(f"[OSExecutor] {self.last_action_message}")
+            return True
+        elif action in ["previous", "prev", "anterior", "retroceder"]:
+            self._send_media_key(0xB1, "prevtrack")
+            self.last_action_message = "Pista anterior."
+            print(f"[OSExecutor] {self.last_action_message}")
+            return True
+        elif action in ["mute", "silenciar", "silencio", "unmute"]:
+            self._send_media_key(0xAD, "volumemute")
+            self.last_action_message = "Audio silenciado / activado."
+            print(f"[OSExecutor] {self.last_action_message}")
+            return True
+        elif action in ["volume_up", "subir_volumen", "subir", "mas_volumen"]:
+            for _ in range(3):
+                self._send_media_key(0xAF, "volumeup")
+            self.last_action_message = "Volumen aumentado."
+            print(f"[OSExecutor] {self.last_action_message}")
+            return True
+        elif action in ["volume_down", "bajar_volumen", "bajar", "menos_volumen"]:
+            for _ in range(3):
+                self._send_media_key(0xAE, "volumedown")
+            self.last_action_message = "Volumen disminuido."
+            print(f"[OSExecutor] {self.last_action_message}")
+            return True
+        else:
+            self._send_media_key(0xB3, "playpause")
+            self.last_action_message = "Control multimedia aplicado."
+            print(f"[OSExecutor] {self.last_action_message}")
+            return True
 
     def _search_content(self, step: ActionStep) -> bool:
         target = step.target.lower().strip()
@@ -147,14 +251,24 @@ class OSExecutor:
         if not query:
             query = step.target
 
+        raw_query = query
         # Limpieza de prefijos de relleno ('canciones de', 'videos de', etc.)
         query = clean_search_term(query)
+
+        # Si el destino es Spotify y la API directa está configurada, reproducir directamente
+        if target == "spotify" and self.integration_router.spotify._get_sp_client():
+            success, msg = self.integration_router.spotify.play_track_or_artist(query)
+            self.last_action_message = msg
+            print(f"[OSExecutor Spotify Direct] {msg}")
+            self.tts.speak(msg)
+            return success
 
         success, msg = self.search_registry.dispatch_search(
             target=target,
             query=query,
             window_manager=self.window_manager,
-            app_indexer=self.resolver.indexer
+            app_indexer=self.resolver.indexer,
+            raw_text=raw_query
         )
         self.last_action_message = msg
         return success
@@ -181,6 +295,17 @@ class OSExecutor:
             if target_type == "url" or execution_target.startswith("http"):
                 webbrowser.open_new_tab(execution_target)
                 self.last_action_message = f"Abriendo {target} en el navegador."
+            elif target_type == "protocol" or "://" in execution_target:
+                try:
+                    os.startfile(execution_target)
+                except Exception:
+                    subprocess.Popen(
+                        f'start "" "{execution_target}"',
+                        shell=True,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL
+                    )
+                self.last_action_message = f"Iniciando {target}."
             else:
                 subprocess.Popen(
                     f'start "" "{execution_target}"',
@@ -373,24 +498,37 @@ class OSExecutor:
         params = step.parameters
         content = params.content or step.target
         if not content:
-            self.tts.speak("Necesito el texto que deseas escribir.")
+            self.last_action_message = "Necesito el texto que deseas escribir."
+            self.tts.speak(self.last_action_message)
             return False
 
-        file_name = safe_filename(params.file_name or "nota_vanshee", default="nota_vanshee")
-        base_dir = self._resolve_output_dir(params.path)
-        file_path = ensure_file_extension(base_dir / file_name, params.language or "txt")
+        # Si el usuario solicitó explícitamente guardar en un archivo específico de disco
+        if params.file_name and any(params.file_name.lower().endswith(ext) for ext in [".txt", ".md", ".json", ".py", ".js", ".html", ".log"]):
+            file_name = safe_filename(params.file_name, default="nota_vanshee")
+            base_dir = self._resolve_output_dir(params.path)
+            file_path = ensure_file_extension(base_dir / file_name, params.language or "txt")
 
-        try:
-            file_path.parent.mkdir(parents=True, exist_ok=True)
-            with file_path.open("a", encoding="utf-8") as handle:
-                handle.write(content.strip() + "\n")
-            print(f"[TextWriter] Texto escrito en: {file_path}")
-            self.tts.speak("Texto escrito correctamente.")
-            return True
-        except Exception as e:
-            print(f"[TextWriter Error] No se pudo escribir texto: {e}")
-            self.tts.speak("No pude escribir el texto solicitado.")
-            return False
+            try:
+                file_path.parent.mkdir(parents=True, exist_ok=True)
+                with file_path.open("a", encoding="utf-8") as handle:
+                    handle.write(content.strip() + "\n")
+                msg = f"Texto guardado en: {file_path.name}"
+                print(f"[TextWriter] {msg} ({file_path})")
+                self.last_action_message = msg
+                self.tts.speak(msg)
+                return True
+            except Exception as e:
+                print(f"[TextWriter Error] No se pudo escribir texto en archivo: {e}")
+                self.last_action_message = "No pude escribir en el archivo."
+                self.tts.speak(self.last_action_message)
+                return False
+
+        # Caso por defecto: Escribir y enviar prompt directamente al asistente/IDE activo (Antigravity, Cursor, Codex, Claude, etc.)
+        target_hint = step.target if step.target.lower() not in ["prompt", "chat", "texto", "editor", "codigo", "código"] else ""
+        success, msg = self.editor_adapter.send_prompt_to_agent(content, target_hint=target_hint)
+        self.last_action_message = msg
+        self.tts.speak(self.last_action_message)
+        return success
 
     def _template_for_file(self, file_path: Path, language: str) -> str:
         suffix = file_path.suffix.lower()
