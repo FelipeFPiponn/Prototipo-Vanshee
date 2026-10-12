@@ -744,6 +744,209 @@ class IntentParser:
 
         return None
 
+    def _fast_mode_check(self, text: str) -> ActionStep | None:
+        """Detección ultra-rápida y determinista de cambio de modos (Modo Gamer vs Modo Trabajo)."""
+        clean = text.strip()
+        clean = re.sub(r"^(?:banshee|vanshee|banchi|oye banshee|oye banshee)[,\s]*", "", clean, flags=re.IGNORECASE).strip()
+        norm = clean.lower().strip("¿?¡!.,;: \t").replace("á", "a").replace("é", "e").replace("í", "i").replace("ó", "o").replace("ú", "u")
+
+        # 1. Modo Gamer
+        if re.search(r"^(?:activa|activar|pon|poner|inicia|iniciar|cambia\s+al?|cambiar\s+al?|entra\s+al?|entrar\s+al?)?\s*(?:el\s+)?modo\s+(?:de\s+)?(?:gamer|juego|gaming|juegos)$", norm) or \
+           norm in ["vamos a jugar", "hora de jugar", "quiero jugar", "modo gamer", "modo juego"]:
+            return ActionStep(intent="MODE_SWITCH", target="gamer", parameters=StepParameters())
+
+        # 2. Modo Trabajo / Programador
+        if re.search(r"^(?:activa|activar|pon|poner|inicia|iniciar|cambia\s+al?|cambiar\s+al?|entra\s+al?|entrar\s+al?)?\s*(?:el\s+)?modo\s+(?:de\s+)?(?:trabajo|programador|programacion|dev|desarrollo|oficina)$", norm) or \
+           norm in ["vamos a programar", "hora de programar", "a programar", "quiero programar", "hora de trabajar", "vamos a trabajar", "modo trabajo", "modo programador", "modo dev"]:
+            return ActionStep(intent="MODE_SWITCH", target="work", parameters=StepParameters())
+
+        # 3. Modo General / Restablecer
+        if re.search(r"^(?:activa|activar|pon|poner|inicia|iniciar|cambia\s+al?|cambiar\s+al?|restablece|restablecer)?\s*(?:el\s+)?modo\s+(?:de\s+)?(?:normal|general|estandar|por\s+defecto)$", norm) or \
+           re.search(r"^(?:desactiva|desactivar|quita|quitar)\s+(?:los\s+|el\s+)?modos?$", norm):
+            return ActionStep(intent="MODE_SWITCH", target="default", parameters=StepParameters())
+
+        # 4. Consulta de estado de modo
+        if re.search(r"^(?:en\s+que\s+modo\s+estas|que\s+modo\s+esta\s+activo|cual\s+es\s+el\s+modo\s+actual|modo\s+actual|estado\s+del\s+modo)$", norm):
+            return ActionStep(intent="MODE_STATUS", target="mode", parameters=StepParameters())
+
+        return None
+
+    def _fast_creation_check(self, text: str) -> ActionStep | None:
+        """Detección ultra-rápida y determinista de creación de carpetas, bloc de notas, archivos y proyectos."""
+        clean = text.strip()
+        clean = re.sub(r"^(?:banshee|vanshee|banchi|oye banshee|oye banshee)[,\s]*", "", clean, flags=re.IGNORECASE).strip()
+        norm = clean.lower().strip("¿?¡!.,;: \t").replace("á", "a").replace("é", "e").replace("í", "i").replace("ó", "o").replace("ú", "u")
+
+        # 1. CARPETAS (Directorios)
+        m_folder = re.search(
+            r"^(?:crea|crear|haz|hacer|genera|generar)?\s*(?:una\s+|la\s+)?(?:nueva\s+)?carpeta(?:\s+llamada|\s+de\s+nombre)?(?:\s+(.+))?$",
+            norm,
+            flags=re.IGNORECASE
+        )
+        if not m_folder and re.search(r"^nueva\s+carpeta(?:\s+llamada|\s+de\s+nombre)?(?:\s+(.+))?$", norm, flags=re.IGNORECASE):
+            m_folder = re.search(r"^nueva\s+carpeta(?:\s+llamada|\s+de\s+nombre)?(?:\s+(.+))?$", norm, flags=re.IGNORECASE)
+
+        if m_folder:
+            raw_folder = (m_folder.group(1) or "").strip()
+            location = ""
+            open_flag = ""
+            if re.search(r"\s+y\s+(?:abrela|ábrela|abrirla)$", raw_folder):
+                raw_folder = re.sub(r"\s+y\s+(?:abrela|ábrela|abrirla)$", "", raw_folder).strip()
+                open_flag = "open"
+
+            m_loc = re.search(r"(?:^|\s+)en\s+(?:el\s+)?(escritorio|desktop|documentos|documents|descargas|downloads|musica|music|imagenes|pictures|fotos|videos)$", raw_folder)
+            if m_loc:
+                location = m_loc.group(1)
+                raw_folder = raw_folder[:m_loc.start()].strip()
+
+            folder_name = raw_folder.strip("'\" \t") if raw_folder else "nueva_carpeta"
+            return ActionStep(
+                intent="CREATE_FOLDER",
+                target="folder",
+                parameters=StepParameters(
+                    file_name=folder_name,
+                    project_name=folder_name,
+                    path=location,
+                    content=open_flag
+                )
+            )
+
+        # 2. BLOC DE NOTAS / BLOCK DE NOTAS / NOTAS DE TEXTO
+        if not re.search(r"^(?:abre|abrir|inicia|iniciar|ejecuta|ejecutar)\s+(?:el\s+)?(?:bloc|block)\s+de\s+notas$", norm):
+            m_notepad = re.search(
+                r"^(?:crea|crear|haz|hacer|nuevo|nueva)?\s*(?:un\s+)?(?:bloc|block)\s+de\s+notas(?:\s+llamado|\s+de\s+nombre)?(?:\s+(.+))?$",
+                norm,
+                flags=re.IGNORECASE
+            )
+            if not m_notepad:
+                m_notepad = re.search(
+                    r"^(?:crea|crear|haz|hacer|nueva)\s+(?:una\s+)?nota(?:\s+de\s+texto)?(?:\s+llamada|\s+de\s+nombre)?(?:\s+(.+))?$",
+                    norm,
+                    flags=re.IGNORECASE
+                )
+
+            if m_notepad and any(k in norm for k in ["crea", "crear", "haz", "hacer", "nuevo", "nueva", "nota", "bloc", "block"]):
+                raw_rest = (m_notepad.group(1) or "").strip()
+                content = ""
+                location = ""
+
+                m_cnt = re.search(r"\s+(?:que\s+diga|con\s+el\s+texto|con\s+el\s+contenido|con\s+contenido)\s+(.+)$", raw_rest)
+                if m_cnt:
+                    content = m_cnt.group(1).strip()
+                    raw_rest = raw_rest[:m_cnt.start()].strip()
+
+                m_loc = re.search(r"(?:^|\s+)en\s+(?:el\s+)?(escritorio|desktop|documentos|documents|descargas|downloads|musica|music|imagenes|pictures|fotos|videos)$", raw_rest)
+                if m_loc:
+                    location = m_loc.group(1)
+                    raw_rest = raw_rest[:m_loc.start()].strip()
+
+                note_name = raw_rest.strip("'\" \t")
+                if note_name and not note_name.lower().endswith(".txt"):
+                    note_name += ".txt"
+
+                return ActionStep(
+                    intent="CREATE_FILE",
+                    target="notepad",
+                    parameters=StepParameters(
+                        file_name=note_name,
+                        project_name=note_name,
+                        content=content,
+                        language="txt",
+                        path=location
+                    )
+                )
+
+        # 3. PROYECTOS DE CÓDIGO
+        m_proj = re.search(
+            r"^(?:crea|crear|haz|hacer|inicia|iniciar)?\s*(?:un\s+)?(?:nuevo\s+)?proyecto(?:\s+(?:de\s+)?([a-zA-Z0-9_\-]+))?(?:\s+(?:llamado|de\s+nombre))?(?:\s+(.+))?$",
+            norm,
+            flags=re.IGNORECASE
+        )
+        if m_proj and any(k in norm for k in ["proyecto", "proyectos"]):
+            p_type = (m_proj.group(1) or "python").strip().lower()
+            p_name = (m_proj.group(2) or "nuevo_proyecto").strip("'\" \t")
+            return ActionStep(
+                intent="CREATE_PROJECT",
+                target="vscode",
+                parameters=StepParameters(
+                    project_type=p_type,
+                    project_name=p_name
+                )
+            )
+
+        # 4. ARCHIVOS GENERALES Y DE CÓDIGO
+        m_file = re.search(
+            r"^(?:crea|crear|haz|hacer|genera|generar)?\s*(?:un\s+|el\s+)?(?:nuevo\s+)?archivo(?:\s+(?:de\s+)?([a-zA-Z0-9_\-\.]+))?(?:\s+(?:llamado|de\s+nombre))?(?:\s+(.+))?$",
+            norm,
+            flags=re.IGNORECASE
+        )
+        if not m_file and re.search(r"^nuevo\s+archivo\s+(.+)$", norm, flags=re.IGNORECASE):
+            m_file2 = re.search(r"^nuevo\s+archivo\s+(.+)$", norm, flags=re.IGNORECASE)
+            raw_target = m_file2.group(1).strip()
+            return ActionStep(
+                intent="CREATE_FILE",
+                target="file",
+                parameters=StepParameters(
+                    file_name=raw_target,
+                    project_name=raw_target
+                )
+            )
+
+        if m_file and any(k in norm for k in ["archivo", "archivos"]):
+            part1 = (m_file.group(1) or "").strip().lower()
+            part2 = (m_file.group(2) or "").strip()
+
+            if not part1 and not part2:
+                return ActionStep(
+                    intent="CREATE_FILE",
+                    target="file",
+                    parameters=StepParameters(file_name="nuevo_archivo.txt", language="txt")
+                )
+
+            location = ""
+            full_str = f"{part1} {part2}".strip()
+            m_loc = re.search(r"(?:^|\s+)en\s+(?:el\s+)?(escritorio|desktop|documentos|documents|descargas|downloads|musica|music|imagenes|pictures|fotos|videos)$", full_str)
+            if m_loc:
+                location = m_loc.group(1)
+                full_str = full_str[:m_loc.start()].strip()
+
+            known_langs = {
+                "python": "python", "py": "python",
+                "javascript": "javascript", "js": "javascript", "node": "node",
+                "typescript": "typescript", "ts": "typescript",
+                "html": "html", "web": "html",
+                "css": "css",
+                "json": "json",
+                "markdown": "markdown", "md": "markdown",
+                "texto": "txt", "txt": "txt",
+                "csharp": "csharp", "cs": "csharp", "cpp": "cpp", "c": "c"
+            }
+
+            lang = "txt"
+            fname = ""
+            if part1 in known_langs and part2:
+                lang = known_langs[part1]
+                fname = part2
+            elif part1 in known_langs and not part2:
+                lang = known_langs[part1]
+                fname = f"archivo_{lang}"
+            else:
+                fname = full_str
+
+            fname = fname.strip("'\" \t")
+            return ActionStep(
+                intent="CREATE_FILE",
+                target="file",
+                parameters=StepParameters(
+                    file_name=fname,
+                    project_name=fname,
+                    language=lang,
+                    path=location
+                )
+            )
+
+        return None
+
     def _fast_open_app_check(self, text: str) -> ActionStep | None:
         """Detección ultra-rápida y determinista de comandos simples de apertura de apps."""
         clean = text.strip()
@@ -764,6 +967,12 @@ class IntentParser:
         p_pipe = self._fast_prompt_check(c)
         if p_pipe and p_pipe.steps:
             return p_pipe.steps
+        mod = self._fast_mode_check(c)
+        if mod:
+            return [mod]
+        creat = self._fast_creation_check(c)
+        if creat:
+            return [creat]
         integ = self._fast_integration_check(c)
         if integ:
             return [integ]
@@ -852,6 +1061,24 @@ class IntentParser:
             return ParsedPipeline(
                 raw_text=text_command,
                 steps=[fast_editor],
+                confidence=1.0
+            )
+
+        # 1.2 Chequeo rápido de cambio o consulta de modo de operación (Gamer vs Trabajo) (0ms)
+        fast_mode = self._fast_mode_check(text_command)
+        if fast_mode:
+            return ParsedPipeline(
+                raw_text=text_command,
+                steps=[fast_mode],
+                confidence=1.0
+            )
+
+        # 1.3 Chequeo rápido de creación de carpetas, bloc de notas y archivos (0ms)
+        fast_creation = self._fast_creation_check(text_command)
+        if fast_creation:
+            return ParsedPipeline(
+                raw_text=text_command,
+                steps=[fast_creation],
                 confidence=1.0
             )
 

@@ -88,7 +88,7 @@ class GitManager:
             pass
         return None
 
-    def _run_git(self, args: list[str], cwd: str) -> subprocess.CompletedProcess:
+    def _run_git(self, args: list[str], cwd: str, timeout: int = 20) -> subprocess.CompletedProcess:
         """Ejecuta un comando git de forma controlada y con decodificación utf-8."""
         return subprocess.run(
             [self._git_binary] + args,
@@ -97,7 +97,7 @@ class GitManager:
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=15,
+            timeout=timeout,
             check=False
         )
 
@@ -314,11 +314,11 @@ class GitManager:
                 return False, f"Tienes cambios locales pendientes sin guardar en '{branch}'. Haz un commit antes de subir."
 
         # 2. Ejecutar git push
-        res = self._run_git(["push"], cwd=ws)
+        res = self._run_git(["push"], cwd=ws, timeout=60)
 
         # Si no tiene upstream configurado (rama nueva remota)
         if res.returncode != 0 and ("no upstream branch" in res.stderr.lower() or "set-upstream" in res.stderr.lower()):
-            res_up = self._run_git(["push", "-u", "origin", branch], cwd=ws)
+            res_up = self._run_git(["push", "-u", "origin", branch], cwd=ws, timeout=60)
             if res_up.returncode == 0:
                 if commit_created:
                     return True, f"Se guardaron los cambios con commit y la rama '{branch}' se subió y vinculó al repositorio remoto con éxito."
@@ -341,7 +341,7 @@ class GitManager:
         if not ws:
             return False, "No se detectó un repositorio Git activo para hacer pull."
 
-        res = self._run_git(["pull"], cwd=ws)
+        res = self._run_git(["pull"], cwd=ws, timeout=60)
         if res.returncode == 0:
             out = res.stdout.strip()
             if "already up to date" in out.lower() or "ya está actualizado" in out.lower():

@@ -15,6 +15,8 @@ from src.executor.window_manager import WindowManager
 from src.executor.search_registry import SearchProviderRegistry
 from src.executor.editor_adapter import EditorAdapter
 from src.integrations.integration_router import integration_router, IntegrationRouter
+from src.integrations.file_manager import file_manager, FileManager
+from src.context.mode_manager import mode_manager
 from src.utils.query_cleaner import clean_search_term
 
 class OSExecutor:
@@ -28,6 +30,8 @@ class OSExecutor:
         self.search_registry = SearchProviderRegistry()
         self.editor_adapter = EditorAdapter(window_manager=self.window_manager)
         self.integration_router = integration_router
+        self.mode_manager = mode_manager
+        self.file_manager = file_manager
         self.screen_mapper = ScreenMapper()
         self.context_engine = ContextAwarenessEngine(screen_mapper=self.screen_mapper)
         self.last_action_message = ""
@@ -183,6 +187,9 @@ class OSExecutor:
                 p_name=step.parameters.project_name
             )
 
+        elif "CREATE_FOLDER" in intent or intent in ["CREATE_FOLDER", "NEW_FOLDER"]:
+            return self._create_contextual_folder(step)
+
         elif "CREATE_FILE" in intent or intent == "CREATE_FILE":
             return self._create_contextual_file(step)
 
@@ -199,6 +206,30 @@ class OSExecutor:
             if target:
                 return self._launch_target(target, position=step.parameters.position)
             self.last_action_message = "Comando de sistema ejecutado."
+            return True
+
+        elif "MODE_SWITCH" in intent or intent in ["MODE_SWITCH", "SET_MODE", "CHANGE_MODE"]:
+            target_mode = target or step.parameters.content or "default"
+            success, desc_msg, voice_msg = self.mode_manager.set_mode(target_mode)
+
+            # Acciones contextuales inmediatas al cambiar de perfil
+            if self.mode_manager.is_work_mode():
+                focused, _ = self.window_manager.find_and_focus("antigravity")
+                if not focused:
+                    self.window_manager.find_and_focus("code")
+            elif self.mode_manager.is_gamer_mode():
+                self.window_manager.find_and_focus("discord")
+
+            self.last_action_message = desc_msg
+            print(f"[OSExecutor Modo] {desc_msg}")
+            self._speak(voice_msg)
+            return success
+
+        elif "MODE_STATUS" in intent or intent in ["MODE_STATUS", "CHECK_MODE", "GET_MODE"]:
+            msg = self.mode_manager.get_mode_summary()
+            self.last_action_message = msg
+            print(f"[OSExecutor Modo] {msg}")
+            self._speak(msg)
             return True
 
         print(f"[OSExecutor Error] Intent no reconocido o no soportado: '{step.intent}'")
@@ -522,38 +553,59 @@ class OSExecutor:
             return Path(learned_location)
         return Path.home() / "Desktop" / "VANSHEE_Projects"
 
-    def _create_contextual_file(self, step: ActionStep) -> bool:
-        app_name = self._announce_context(action_hint=step.target, user_command=step.target, ask=False)
+    def _create_contextual_folder(self, step: ActionStep) -> bool:
+        """Crea una carpeta en Windows y opcionalmente la abre en el Explorador."""
         params = step.parameters
-        language = params.language or params.project_type or "txt"
-        file_name = safe_filename(params.file_name or params.project_name or "nuevo_archivo")
-        base_dir = self._resolve_output_dir(params.path)
-        file_path = ensure_file_extension(base_dir / file_name, language)
+        folder_name = params.file_name or params.project_name or step.target or "Nueva_Carpeta"
+        location = params.path
+        open_after = bool(params.content == "open" or "abre" in (params.content or "").lower())
 
-        try:
-            file_path.parent.mkdir(parents=True, exist_ok=True)
-            if not file_path.exists():
-                initial_content = params.content or self._template_for_file(file_path, language)
-                file_path.write_text(initial_content, encoding="utf-8")
+        success, msg, path = self.file_manager.create_folder(
+            folder_name=folder_name,
+            location=location,
+            open_after=open_after
+        )
+        self.last_action_message = msg
+        print(f"[OSExecutor Carpeta] {msg}")
+        self._speak(msg)
+        return success
 
-            msg = f"Archivo creado o disponible: {file_path}"
-            print(f"[FileCreator] {msg}")
-            self._speak("Archivo creado y listo.")
+    def _create_contextual_file(self, step: ActionStep) -> bool:
+        """Crea un archivo (Bloc de notas o código) en Windows OS."""
+        self._announce_context(action_hint=step.target, user_command=step.target, ask=False)
+        params = step.parameters
+        target = step.target.lower().strip()
+        file_name = params.file_name or params.project_name or "nuevo_archivo"
+        language = params.language or "txt"
+        content = params.content
+        location = params.path
 
-            if app_name == "vscode" or step.target.lower() in ["vscode", "vs code", "visual code", "visual studio code"]:
-                ide_path, _ = self.resolver.resolve("vscode")
-                if ide_path:
-                    subprocess.Popen(
-                        f'start "" "{ide_path}" "{file_path}"',
-                        shell=True,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                    )
-            return True
-        except Exception as e:
-            print(f"[FileCreator Error] No se pudo crear archivo: {e}")
-            self._speak("No pude crear el archivo solicitado.")
-            return False
+        # Si el destino es Notepad o se solicitó explícitamente un bloc de notas
+        if target in ["notepad", "bloc de notas", "block de notas"] or language in ["notepad", "bloc de notas", "block de notas"]:
+            success, msg, path = self.file_manager.create_notepad(
+                note_name=file_name,
+                content=content,
+                location=location,
+                open_notepad=True
+            )
+        else:
+            success, msg, path = self.file_manager.create_file(
+                file_name=file_name,
+                content=content,
+                location=location,
+                language=language,
+                open_after=True
+            )
+
+        self.last_action_message = msg
+        print(f"[OSExecutor Archivo] {msg}")
+        self._speak(msg)
+        return success
+
+    def _template_for_file(self, file_path: Path, language: str = "") -> str:
+        """Retorna una plantilla inicial para un archivo según su extensión."""
+        suffix = file_path.suffix.lower() if isinstance(file_path, Path) else ""
+        return self.file_manager.STARTER_TEMPLATES.get(suffix, "")
 
     def _write_contextual_text(self, step: ActionStep) -> bool:
         params = step.parameters
