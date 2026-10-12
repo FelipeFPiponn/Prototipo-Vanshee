@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 import asyncio
 import sqlite3
 import tempfile
@@ -14,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import sounddevice as sd
 
-ROOT_DIR = Path(__file__).resolve().parent.parent
+ROOT_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
@@ -38,6 +39,15 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.middleware("http")
+async def add_no_cache_headers(request, call_next):
+    response = await call_next(request)
+    # Prevent browser caching of UI static assets and HTML
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
 
 # Global singleton state
 class SystemState:
@@ -128,6 +138,9 @@ debouncer = CommandDebouncer(window_seconds=2.5)
 def on_wake_word_detected(full_phrase: str, trailing_command: str):
     print(f"\n[Banshee Wake Trigger] Frase: '{full_phrase}' | Comando detectado: '{trailing_command}'")
     
+    # Mostrar y enfocar automáticamente la ventana de chat al hablar
+    window_bridge.show_chat()
+    
     # Broadcast wake word event to all UI clients
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -217,7 +230,137 @@ class SettingsUpdateRequest(BaseModel):
     voice_id: Optional[str] = None
     wakeword_enabled: Optional[bool] = None
 
+class PinWindowRequest(BaseModel):
+    topmost: bool
+
+class WindowBridge:
+    def __init__(self):
+        self.chat_window = None
+        self.launcher_window = None
+        self.is_chat_visible: bool = True
+        self.last_toggle_time: float = 0.0
+
+    def show_chat(self) -> bool:
+        self.is_chat_visible = True
+        shown = False
+        if self.chat_window:
+            try:
+                self.chat_window.show()
+                self.chat_window.restore()
+                shown = True
+            except Exception:
+                pass
+        try:
+            import win32gui
+            import win32con
+            for title in ["Banshee Chat", "Banshee"]:
+                hwnd = win32gui.FindWindow(None, title)
+                if hwnd:
+                    win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
+                    win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+                    win32gui.SetWindowPos(hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0, 
+                                          win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW)
+                    win32gui.SetForegroundWindow(hwnd)
+                    shown = True
+        except Exception:
+            pass
+        return shown
+
+    def hide_chat(self) -> bool:
+        self.is_chat_visible = False
+        hidden = False
+        if self.chat_window:
+            try:
+                self.chat_window.hide()
+                hidden = True
+            except Exception:
+                pass
+        try:
+            import win32gui
+            import win32con
+            for title in ["Banshee Chat", "Banshee"]:
+                hwnd = win32gui.FindWindow(None, title)
+                if hwnd:
+                    win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
+                    hidden = True
+        except Exception:
+            pass
+        return hidden
+
+    def toggle_chat(self) -> bool:
+        now = time.time()
+        if (now - self.last_toggle_time) < 0.4:
+            return self.is_chat_visible
+        self.last_toggle_time = now
+
+        if self.is_chat_visible:
+            return self.hide_chat()
+        else:
+            return self.show_chat()
+
+window_bridge = WindowBridge()
+
 # API Routes
+@app.post("/api/window/pin")
+async def toggle_window_pin(req: PinWindowRequest):
+    """Fija o desfija la ventana de Banshee como 'Siempre visible' (HWND_TOPMOST) en Windows."""
+    try:
+        import ctypes
+        import win32gui
+        brain = get_brain()
+        hwnd = 0
+        if win32gui:
+            win = brain.executor.window_manager.find_window("banshee")
+            if win:
+                hwnd = win["hwnd"]
+            if not hwnd:
+                hwnd = win32gui.GetForegroundWindow()
+        if hwnd:
+            flag = -1 if req.topmost else -2  # HWND_TOPMOST = -1, HWND_NOTOPMOST = -2
+            ctypes.windll.user32.SetWindowPos(hwnd, flag, 0, 0, 0, 0, 0x0001 | 0x0002)  # SWP_NOSIZE | SWP_NOMOVE
+            return {"status": "ok", "topmost": req.topmost, "hwnd": hwnd}
+    except Exception as e:
+        print(f"[Pin Window Error] {e}")
+    return {"status": "ok", "topmost": req.topmost}
+
+@app.post("/api/window/show_chat")
+async def show_chat_window():
+    """Muestra y trae al frente la ventana de Chat."""
+    success = window_bridge.show_chat()
+    await broadcast_ws("window_state", {"visible": True})
+    return {"status": "ok", "action": "show", "success": success}
+
+@app.post("/api/window/hide_chat")
+async def hide_chat_window():
+    """Oculta la ventana de Chat liberando el 100% de la pantalla para otras aplicaciones."""
+    success = window_bridge.hide_chat()
+    await broadcast_ws("window_state", {"visible": False})
+    return {"status": "ok", "action": "hide", "success": success}
+
+@app.post("/api/window/toggle_chat")
+async def toggle_chat_window():
+    """Alterna la visibilidad de la ventana de Chat."""
+    success = window_bridge.toggle_chat()
+    await broadcast_ws("window_state", {"visible": window_bridge.is_chat_visible})
+    return {"status": "ok", "visible": window_bridge.is_chat_visible, "success": success}
+
+@app.post("/api/system/shutdown")
+async def shutdown_system():
+    """Cierra y finaliza completamente la aplicación Banshee y el proceso de terminal."""
+    def _delayed_exit():
+        time.sleep(0.2)
+        if state.wake_detector:
+            try:
+                state.wake_detector.stop()
+            except Exception:
+                pass
+        import os
+        os._exit(0)
+
+    import threading
+    threading.Thread(target=_delayed_exit, daemon=True).start()
+    return {"status": "shutting_down", "message": "Vanshee se está cerrando por completo."}
+
 @app.get("/api/status")
 async def get_status():
     init_db()
@@ -515,7 +658,7 @@ async def test_mic(duration: float = Form(3.0), device_index: Optional[int] = Fo
         peak = float(np.max(np.abs(samples)))
 
         # Guardar audio en archivo estático para que el usuario pueda escucharlo inmediatamente
-        audio_dir = Path(__file__).resolve().parent / "web" / "static" / "audio"
+        audio_dir = web_dir / "static" / "audio"
         audio_dir.mkdir(parents=True, exist_ok=True)
         wav_path = audio_dir / "mic_test_sample.wav"
 
@@ -731,7 +874,8 @@ async def editor_websocket_endpoint(websocket: WebSocket):
                     session_id=session_id,
                     editor_name=editor_name,
                     ws=websocket,
-                    metadata=metadata
+                    metadata=metadata,
+                    loop=asyncio.get_running_loop()
                 )
                 await websocket.send_json({
                     "jsonrpc": "2.0",
@@ -794,7 +938,23 @@ async def editor_insert_code(req: dict):
     return {"success": success}
 
 # Static files & Web UI
-web_dir = Path(__file__).resolve().parent / "web"
+def _resolve_web_dir() -> Path:
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            cand = Path(meipass) / "src" / "web"
+            if cand.exists():
+                return cand
+            cand = Path(meipass) / "web"
+            if cand.exists():
+                return cand
+        exe_dir = Path(sys.executable).resolve().parent
+        for sub in [exe_dir / "src" / "web", exe_dir / "_internal" / "src" / "web", exe_dir / "web"]:
+            if sub.exists():
+                return sub
+    return Path(__file__).resolve().parent / "web"
+
+web_dir = _resolve_web_dir()
 web_dir.mkdir(parents=True, exist_ok=True)
 static_dir = web_dir / "static"
 static_dir.mkdir(parents=True, exist_ok=True)
@@ -805,8 +965,25 @@ app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 async def serve_index():
     index_file = web_dir / "index.html"
     if index_file.exists():
-        return FileResponse(index_file)
+        headers = {
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        }
+        return FileResponse(index_file, headers=headers)
     return HTMLResponse("<h1>V.ANSHEE Web UI Loading...</h1>")
+
+@app.get("/launcher", response_class=HTMLResponse)
+async def serve_launcher():
+    launcher_file = web_dir / "launcher.html"
+    if launcher_file.exists():
+        headers = {
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        }
+        return FileResponse(launcher_file, headers=headers)
+    return HTMLResponse("<h1>Vanshee Launcher Loading...</h1>")
 
 @app.on_event("startup")
 async def on_startup():

@@ -32,6 +32,11 @@ class OSExecutor:
         self.context_engine = ContextAwarenessEngine(screen_mapper=self.screen_mapper)
         self.last_action_message = ""
 
+    def _speak(self, msg: str, block: bool = True):
+        """Emite voz únicamente si la interacción por voz interna del ejecutor está explícitamente habilitada."""
+        if self.interactive_voice and self.tts and msg:
+            self.tts.speak(msg, block=block)
+
     def execute(self, pipeline: ParsedPipeline) -> bool:
         """Punto de entrada compatible con el bucle principal main.py."""
         return self.execute_pipeline(pipeline)
@@ -112,7 +117,7 @@ class OSExecutor:
             return success
 
         # Integraciones directas de alta velocidad (Spotify, Valorant, League of Legends, Discord, OBS, Audio Mixer, Hardware, Obsidian)
-        elif any(intent.startswith(p) for p in ["SPOTIFY_", "VALORANT_", "LOL_", "DISCORD_", "OBS_", "OBSIDIAN_", "HARDWARE_", "AUDIO_", "SET_APP_VOLUME", "SET_VOLUME_PCT", "MUTE_APP", "UNMUTE_APP"]):
+        elif any(intent.startswith(p) for p in ["GIT_", "SPOTIFY_", "VALORANT_", "LOL_", "DISCORD_", "OBS_", "OBSIDIAN_", "HARDWARE_", "AUDIO_", "SET_APP_VOLUME", "SET_VOLUME_PCT", "MUTE_APP", "UNMUTE_APP"]):
             vol_val = 50.0
             if step.parameters.content.isdigit():
                 vol_val = float(step.parameters.content)
@@ -127,7 +132,39 @@ class OSExecutor:
             )
             self.last_action_message = msg
             print(f"[OSExecutor Integración Directa] {msg}")
-            self.tts.speak(msg)
+            self._speak(msg)
+            return success
+
+        elif "WINDOW" in intent or "SNAP" in intent or intent in ["WINDOW_CONTROL", "SNAP_WINDOW", "POSITION_WINDOW"]:
+            target_pos = step.parameters.position or step.parameters.content
+            target_app = target
+
+            # Si target_pos está vacío pero target_app es un identificador de posición
+            if not target_pos and self.window_manager._normalize_position(target_app):
+                target_pos = target_app
+                target_app = "active"
+
+            # Chequear si es una acción de ordenar / organizar ventanas (mosaico o división automática)
+            if target_app in ["tile", "organize", "order", "ordena", "organiza"] or target_pos in ["tile", "organize", "mosaico"]:
+                success, msg = self.window_manager.tile_windows()
+                self.last_action_message = msg
+                print(f"[OSExecutor Ventanas] {msg}")
+                self._speak(msg)
+                return success
+
+            # Chequear si es una acción sobre pestañas
+            if target_app in ["next_tab", "prev_tab", "previous_tab", "new_tab", "close_tab", "reopen_tab", "duplicate_tab"] or target_pos in ["next_tab", "prev_tab", "new_tab", "close_tab"]:
+                tab_act = target_app if target_app in ["next_tab", "prev_tab", "previous_tab", "new_tab", "close_tab", "reopen_tab", "duplicate_tab"] else target_pos
+                success, msg = self.window_manager.handle_tab_action(tab_act)
+                self.last_action_message = msg
+                print(f"[OSExecutor Pestañas] {msg}")
+                self._speak(msg)
+                return success
+
+            success, msg = self.window_manager.snap_window(target=target_app, position=target_pos)
+            self.last_action_message = msg
+            print(f"[OSExecutor Ventana] {msg}")
+            self._speak(msg)
             return success
 
         elif "MEDIA" in intent or intent == "MEDIA_CONTROL":
@@ -137,7 +174,7 @@ class OSExecutor:
             return self._search_content(step)
 
         elif "OPEN_APP" in intent or intent == "OPEN_APP":
-            return self._launch_target(target)
+            return self._launch_target(target, position=step.parameters.position)
 
         elif "CREATE_PROJECT" in intent or intent == "CREATE_PROJECT":
             return self._create_and_open_project(
@@ -152,12 +189,15 @@ class OSExecutor:
         elif "WRITE_TEXT" in intent or intent == "WRITE_TEXT":
             return self._write_contextual_text(step)
 
+        elif "EDITOR_STATUS" in intent or intent in ["EDITOR_STATUS", "CHECK_EDITOR", "EDITOR_CONNECT"]:
+            return self._check_editor_status(step)
+
         elif "INTERACT" in intent or intent in ["INTERACT_SCREEN", "SCREEN_INTERACT", "CLICK_FIRST"]:
             return self._handle_screen_interaction(step)
 
         elif "SYSTEM_CONTROL" in intent or intent == "SYSTEM_CONTROL":
             if target:
-                return self._launch_target(target)
+                return self._launch_target(target, position=step.parameters.position)
             self.last_action_message = "Comando de sistema ejecutado."
             return True
 
@@ -260,7 +300,7 @@ class OSExecutor:
             success, msg = self.integration_router.spotify.play_track_or_artist(query)
             self.last_action_message = msg
             print(f"[OSExecutor Spotify Direct] {msg}")
-            self.tts.speak(msg)
+            self._speak(msg)
             return success
 
         success, msg = self.search_registry.dispatch_search(
@@ -273,13 +313,19 @@ class OSExecutor:
         self.last_action_message = msg
         return success
 
-    def _launch_target(self, target: str) -> bool:
+    def _launch_target(self, target: str, position: str = "") -> bool:
         target_clean = target.lower().strip()
 
         # 0. Priorizar ventana o app que ya esté abierta en el sistema
         focused, win_title = self.window_manager.find_and_focus(target_clean)
         if focused:
-            msg = f"{target} ya estaba abierto; pasando a primer plano."
+            if position:
+                self.window_manager.snap_window(target_clean, position)
+                norm_pos = self.window_manager._normalize_position(position)
+                pos_label = self.window_manager._position_label(norm_pos)
+                msg = f"{target} ya estaba abierto; pasando a primer plano en {pos_label}."
+            else:
+                msg = f"{target} ya estaba abierto; pasando a primer plano."
             print(f"[OSExecutor Ventana Abierta] {msg} ('{win_title}')")
             self.last_action_message = msg
             return True
@@ -317,9 +363,24 @@ class OSExecutor:
 
             self.resolver.save_learned_command(target, execution_target, target_type)
 
-            # Dar 1.5s a la aplicación para desplegarse en pantalla antes de mapear
-            import time
-            time.sleep(1.5)
+            # Si se solicitó posición de pantalla, esperar a que aparezca la ventana y posicionarla
+            if position:
+                import time
+                for _ in range(12):
+                    time.sleep(0.15)
+                    win = self.window_manager.find_window(target_clean)
+                    if not win and ("youtube" in target_clean or "navegador" in target_clean or "web" in target_clean or "http" in execution_target):
+                        win = self.window_manager.find_browser_window()
+                    if win:
+                        self.window_manager.set_window_position(win["hwnd"], position)
+                        norm_pos = self.window_manager._normalize_position(position)
+                        pos_label = self.window_manager._position_label(norm_pos)
+                        self.last_action_message = f"Abriendo {target} en {pos_label}."
+                        break
+            else:
+                # Dar 1.0s a la aplicación para desplegarse en pantalla antes de mapear
+                import time
+                time.sleep(1.0)
 
             # Mapeo y escaneo del panorama en pantalla en tiempo real
             screen_context = self.screen_mapper.map_screen_context(action_hint=target)
@@ -333,7 +394,7 @@ class OSExecutor:
                     ans_clean = answer_play.lower()
                     if any(w in ans_clean for w in ["si", "sí", "play", "iniciar", "reproducir", "reprodúcelo", "dale"]):
                         self.screen_mapper.trigger_play_content()
-                        self.tts.speak("Iniciando reproducción.")
+                        self._speak("Iniciando reproducción.")
 
             # Consulta por voz de Verificación y Obviedad del Aprendizaje con Pausa Activa
             if self.interactive_voice:
@@ -344,9 +405,9 @@ class OSExecutor:
                     if any(w in ans_clean for w in ["no", "incorrecto", "fallo", "error", "otra cosa", "mal"]):
                         print(f"[Aprendizaje Descartado] El usuario indicó que '{target}' no se ejecutó como esperaba. Eliminando de memoria...")
                         self.resolver.forget_command(target)
-                        self.tts.speak("Entendido, elimino ese aprendizaje para no repetirlo.")
+                        self._speak("Entendido, elimino ese aprendizaje para no repetirlo.")
                     elif any(w in ans_clean for w in ["si", "sí", "correcto", "perfecto", "bien", "funciona", "claro"]):
-                        self.tts.speak("Excelente, rutina memorizada.")
+                        self._speak("Excelente, rutina memorizada.")
 
             return True
         except Exception as e:
@@ -417,7 +478,7 @@ class OSExecutor:
 
         msg = f"Creando entorno de proyecto {final_name} en formato {final_type}."
         print(f"[ProjectCreator] {msg} en: {base_dir}")
-        self.tts.speak(msg)
+        self._speak(msg)
 
         if final_type == "python":
             subprocess.run(f"python -m venv \"{base_dir / '.venv'}\"", shell=True)
@@ -436,7 +497,7 @@ class OSExecutor:
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL
                 )
-                self.tts.speak("Proyecto creado y cargado en tu editor.")
+                self._speak("Proyecto creado y cargado en tu editor.")
                 return True
             except Exception as e:
                 print(f"[ProjectCreator Error] No se pudo abrir el IDE: {e}")
@@ -447,7 +508,7 @@ class OSExecutor:
         print(f"[Contexto V.ANSHEE] App='{snapshot.app_name}' | Ventana='{snapshot.window_title}' | Confianza={snapshot.confidence:.2f}")
         print(f"[Contexto V.ANSHEE] {snapshot.suggestion}")
         if ask and snapshot.suggestion:
-            self.tts.speak(snapshot.suggestion)
+            self._speak(snapshot.suggestion)
         return snapshot.app_name
 
     def _resolve_output_dir(self, requested_path: str = "") -> Path:
@@ -477,7 +538,7 @@ class OSExecutor:
 
             msg = f"Archivo creado o disponible: {file_path}"
             print(f"[FileCreator] {msg}")
-            self.tts.speak("Archivo creado y listo.")
+            self._speak("Archivo creado y listo.")
 
             if app_name == "vscode" or step.target.lower() in ["vscode", "vs code", "visual code", "visual studio code"]:
                 ide_path, _ = self.resolver.resolve("vscode")
@@ -491,7 +552,7 @@ class OSExecutor:
             return True
         except Exception as e:
             print(f"[FileCreator Error] No se pudo crear archivo: {e}")
-            self.tts.speak("No pude crear el archivo solicitado.")
+            self._speak("No pude crear el archivo solicitado.")
             return False
 
     def _write_contextual_text(self, step: ActionStep) -> bool:
@@ -499,7 +560,7 @@ class OSExecutor:
         content = params.content or step.target
         if not content:
             self.last_action_message = "Necesito el texto que deseas escribir."
-            self.tts.speak(self.last_action_message)
+            self._speak(self.last_action_message)
             return False
 
         # Si el usuario solicitó explícitamente guardar en un archivo específico de disco
@@ -515,20 +576,43 @@ class OSExecutor:
                 msg = f"Texto guardado en: {file_path.name}"
                 print(f"[TextWriter] {msg} ({file_path})")
                 self.last_action_message = msg
-                self.tts.speak(msg)
+                self._speak(msg)
                 return True
             except Exception as e:
                 print(f"[TextWriter Error] No se pudo escribir texto en archivo: {e}")
                 self.last_action_message = "No pude escribir en el archivo."
-                self.tts.speak(self.last_action_message)
+                self._speak(self.last_action_message)
                 return False
 
         # Caso por defecto: Escribir y enviar prompt directamente al asistente/IDE activo (Antigravity, Cursor, Codex, Claude, etc.)
         target_hint = step.target if step.target.lower() not in ["prompt", "chat", "texto", "editor", "codigo", "código"] else ""
         success, msg = self.editor_adapter.send_prompt_to_agent(content, target_hint=target_hint)
         self.last_action_message = msg
-        self.tts.speak(self.last_action_message)
+        self._speak(self.last_action_message)
         return success
+
+    def _check_editor_status(self, step: ActionStep) -> bool:
+        """Verifica y reporta el estado de la conexión WebSocket con editores de código (IDE Bridge)."""
+        hub = self.editor_adapter.editor_hub
+        sessions = getattr(hub, "sessions", {})
+        if sessions:
+            active_list = []
+            for s in sessions.values():
+                info = f"{s.editor_name.title()}"
+                if s.active_file:
+                    info += f" ({Path(s.active_file).name})"
+                active_list.append(info)
+            msg = f"Conexión activa con {len(sessions)} editor(es): {', '.join(active_list)}. Listo para enviar prompts directamente al agente."
+            print(f"[OSExecutor EditorBridge] {msg}")
+            self.last_action_message = msg
+            self._speak(msg)
+            return True
+        else:
+            msg = "No hay editores de código conectados. Inicia Antigravity IDE o VS Code con la extensión V.ANSHEE Bridge para conectarte."
+            print(f"[OSExecutor EditorBridge] {msg}")
+            self.last_action_message = msg
+            self._speak(msg)
+            return False
 
     def _template_for_file(self, file_path: Path, language: str) -> str:
         suffix = file_path.suffix.lower()

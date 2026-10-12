@@ -1,14 +1,8 @@
 import os
 import sys
-
-# Forzar codificación UTF-8 en consola de Windows para evitar errores CP1252 charmap
-if sys.platform == "win32":
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-
+import io
+import multiprocessing
+from pathlib import Path
 import time
 import socket
 import shutil
@@ -17,12 +11,52 @@ import webbrowser
 import subprocess
 import threading
 import uvicorn
-from pathlib import Path
 from typing import Optional
 
-ROOT = Path(__file__).resolve().parent
+# Soporte de multiproceso en ejecutables congelados con PyInstaller en Windows
+multiprocessing.freeze_support()
+
+ROOT = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+# En ejecutables de Windows sin consola (--noconsole), sys.stdout y sys.stderr son None.
+# Uvicorn y sus formateadores de log crashean al intentar sys.stdout.isatty().
+class SafeStream:
+    def __init__(self, log_path: Path):
+        self.log_path = log_path
+    def write(self, data):
+        if not data:
+            return
+        try:
+            with open(self.log_path, "a", encoding="utf-8", errors="replace") as f:
+                f.write(data)
+        except Exception:
+            pass
+    def flush(self):
+        pass
+    def isatty(self):
+        return False
+
+log_file = ROOT / "vanshee_app.log"
+if sys.stdout is None:
+    sys.stdout = SafeStream(log_file)
+elif sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+if sys.stderr is None:
+    sys.stderr = SafeStream(log_file)
+elif sys.platform == "win32":
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+if sys.stdin is None:
+    sys.stdin = io.StringIO()
 
 from config.settings import settings
 
@@ -100,6 +134,77 @@ def wait_for_server(url: str, timeout: float = 30.0) -> bool:
             time.sleep(0.25)
     return False
 
+def get_primary_work_area():
+    """Retorna las coordenadas del área de trabajo (restando la barra de tareas de Windows)."""
+    try:
+        import win32api
+        import win32con
+        hmon = win32api.MonitorFromPoint((0, 0), win32con.MONITOR_DEFAULTTOPRIMARY)
+        info = win32api.GetMonitorInfo(hmon)
+        work = info.get("work", (0, 0, 1920, 1040))
+        return work[0], work[1], work[2], work[3]
+    except Exception:
+        try:
+            import ctypes
+            user32 = ctypes.windll.user32
+            sw = user32.GetSystemMetrics(0)
+            sh = user32.GetSystemMetrics(1)
+            return 0, 0, sw, max(600, sh - 48)
+        except Exception:
+            return 0, 0, 1920, 1040
+
+def launch_desktop_gui(url: str) -> bool:
+    """Abre la arquitectura coordinada: Burbuja flotante circular nativa (Tkinter) + Panel de Chat (pywebview 420x720)."""
+    try:
+        import webview
+        from src.server import window_bridge
+        from src.ui.floating_launcher import FloatingLauncherBubble
+
+        wx, wy, wr, wb = get_primary_work_area()
+
+        # 1. Iniciar la Burbuja Flotante Circular Nativa (100% transparente) en un hilo daemon
+        bubble = FloatingLauncherBubble(api_url=url)
+        bubble_thread = threading.Thread(target=bubble.start, daemon=True, name="LauncherBubbleThread")
+        bubble_thread.start()
+
+        # 2. Ventana de Chat Principal (420x720)
+        cw = 420
+        ch = min(720, max(500, wb - wy - 40))
+        cx = max(wx, wr - cw - 20)
+        cy = max(wy, wb - ch - 20)
+
+        chat_window = webview.create_window(
+            title="Vanshee Chat",
+            url=url,
+            width=cw,
+            height=ch,
+            x=cx,
+            y=cy,
+            frameless=True,       # 100% Sin barra de título de Windows
+            on_top=True,          # Superpuesto siempre a otras ventanas
+            easy_drag=False,
+            background_color='#0d111a'
+        )
+
+        # Registrar ventana de chat en el puente del servidor
+        window_bridge.chat_window = chat_window
+
+        print(f"[V.ANSHEE UI] Interfaz iniciada: Burbuja circular nativa + Panel de Chat ({cw}x{ch}).")
+        webview.start(debug=False)
+        
+        # Al cerrar la ventana, terminar todo el proceso y la terminal limpiamente
+        import os
+        os._exit(0)
+        return True
+    except Exception as e:
+        print(f"[V.ANSHEE UI Warning] No se pudo iniciar con pywebview ({e}). Usando modo navegador...")
+        open_app_window(url)
+        return False
+    except Exception as e:
+        print(f"[V.ANSHEE UI Warning] No se pudo iniciar con pywebview ({e}). Usando modo navegador...")
+        open_app_window(url)
+        return False
+
 def open_app_window(url: str):
     """Abre la consola como una aplicación de escritorio nativa usando Edge o Chrome en modo App."""
     server_ready = wait_for_server(url, timeout=30.0)
@@ -108,7 +213,27 @@ def open_app_window(url: str):
     else:
         print(f"[V.ANSHEE UI] Servidor verificado y respondiendo en {url}.")
 
-    # 1. Intentar Microsoft Edge en modo aplicación (sin barras de navegador)
+    # Directorio de perfil aislado para la app de escritorio de Vanshee
+    profile_dir = os.path.expandvars(r"%LOCALAPPDATA%\Vanshee\UIProfile")
+    try:
+        os.makedirs(profile_dir, exist_ok=True)
+    except Exception:
+        pass
+
+    # Dimensiones, posicionamiento y aislamiento de chatbot widget flotante
+    chatbot_args = [
+        f"--user-data-dir={profile_dir}",
+        "--window-size=430,730",
+        "--window-position=1460,260",
+        "--disable-http-cache",
+        "--disk-cache-size=1",
+        "--media-cache-size=1",
+        "--no-first-run",
+        "--no-default-browser-check",
+    ]
+
+    launched = False
+    # 1. Intentar Microsoft Edge en modo aplicación
     edge_paths = [
         os.path.expandvars(r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe"),
         os.path.expandvars(r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"),
@@ -116,30 +241,41 @@ def open_app_window(url: str):
     for p in edge_paths:
         if os.path.exists(p):
             try:
-                subprocess.Popen([p, f"--app={url}", "--window-size=1180,780", "--window-position=center"])
-                print(f"[V.ANSHEE UI] Consola de escritorio abierta con Microsoft Edge: {url}")
-                return
+                subprocess.Popen([p, f"--app={url}"] + chatbot_args)
+                print(f"[V.ANSHEE UI] Chatbot de escritorio abierto con Microsoft Edge: {url}")
+                launched = True
+                break
             except Exception:
                 pass
 
     # 2. Intentar Google Chrome en modo aplicación
-    chrome_paths = [
-        os.path.expandvars(r"%ProgramFiles%\Google\Chrome\Application\chrome.exe"),
-        os.path.expandvars(r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"),
-        os.path.expandvars(r"%LocalAppData%\Google\Chrome\Application\chrome.exe"),
-    ]
-    for p in chrome_paths:
-        if os.path.exists(p):
-            try:
-                subprocess.Popen([p, f"--app={url}", "--window-size=1180,780"])
-                print(f"[V.ANSHEE UI] Consola de escritorio abierta con Google Chrome: {url}")
-                return
-            except Exception:
-                pass
+    if not launched:
+        chrome_paths = [
+            os.path.expandvars(r"%ProgramFiles%\Google\Chrome\Application\chrome.exe"),
+            os.path.expandvars(r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"),
+            os.path.expandvars(r"%LocalAppData%\Google\Chrome\Application\chrome.exe"),
+        ]
+        for p in chrome_paths:
+            if os.path.exists(p):
+                try:
+                    subprocess.Popen([p, f"--app={url}"] + chatbot_args)
+                    print(f"[V.ANSHEE UI] Chatbot de escritorio abierto con Google Chrome: {url}")
+                    launched = True
+                    break
+                except Exception:
+                    pass
 
-    # 3. Fallback al navegador por defecto del sistema
-    print(f"[V.ANSHEE UI] Abriendo en navegador predeterminado: {url}")
-    webbrowser.open(url)
+    # 3. Fallback al navegador predeterminado
+    if not launched:
+        print(f"[V.ANSHEE UI] Abriendo en navegador predeterminado: {url}")
+        webbrowser.open(url)
+
+    # Mantener el proceso activo para que el servidor Uvicorn no se detenga
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        pass
 
 def main():
     # 1. Asegurar que Ollama esté levantado
@@ -156,14 +292,22 @@ def main():
     print("        [V.ANSHEE] - ASISTENTE AUTONOMO DE WINDOWS         ")
     print("=" * 60)
     print(f"[Consola] Enlace local: {url}")
-    print("[Voz] Di 'Banshee' en cualquier momento para hablar.")
+    print("[Voz] Di 'Vanshee' en cualquier momento para hablar.")
     print("=" * 60)
 
-    # Iniciar hilo de apertura de ventana que espera a que el servidor HTTP esté listo
-    threading.Thread(target=open_app_window, args=(url,), daemon=True).start()
+    # Iniciar servidor Uvicorn en un hilo secundario daemon pasando log_config=None para evitar crasheos en modo ventana
+    from src.server import app
+    server_thread = threading.Thread(
+        target=lambda: uvicorn.run(app, host=host, port=port, log_config=None, log_level="warning"),
+        daemon=True
+    )
+    server_thread.start()
 
-    # Ejecutar Uvicorn
-    uvicorn.run("src.server:app", host=host, port=port, log_level="info")
+    # Esperar a que el servidor HTTP esté listo
+    wait_for_server(url, timeout=30.0)
+
+    # Iniciar la interfaz gráfica de escritorio nativa en el hilo principal
+    launch_desktop_gui(url)
 
 if __name__ == "__main__":
     main()

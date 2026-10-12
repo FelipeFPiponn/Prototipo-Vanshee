@@ -20,14 +20,14 @@ class EditorAdapter:
         self.editor_hub = hub or editor_hub
 
     def send_prompt_to_agent(self, prompt: str, target_hint: str = "") -> Tuple[bool, str]:
-        """Envía un prompt al agente de IA del editor (Antigravity, Cursor, Copilot, etc.)."""
+        """Envía un prompt directamente al agente de IA del editor (Antigravity, Cursor, Copilot, etc.)."""
         # 1. Estrategia Directa: Si el editor está conectado por WebSocket / MCP
         if self.editor_hub.has_active_editor(target_hint):
             session = self.editor_hub.get_active_session(target_hint)
             editor_name = session.editor_name if session else "editor"
-            success = self.editor_hub.send_prompt(prompt, editor_hint=target_hint)
+            success = self.editor_hub.send_prompt(prompt, editor_hint=target_hint, mode="agent")
             if success:
-                msg = f"Prompt inyectado directamente en {editor_name.title()}: '{prompt}'"
+                msg = f"Prompt enviado directamente al agente de {editor_name.title()}: '{prompt}'"
                 print(f"[EditorAdapter Direct] {msg}")
                 return True, msg
 

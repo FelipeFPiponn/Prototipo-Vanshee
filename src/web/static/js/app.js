@@ -1,26 +1,54 @@
-// BANSHEE - Minimalist Assistant Client Logic
+// ==========================================================================
+// VANSHEE - Modern AI Chatbot Client Controller (Fin / Intercom Style)
+// ==========================================================================
+
 document.addEventListener('DOMContentLoaded', () => {
   const state = {
+    isChatOpen: true,
+    isPinned: false,
     ttsEnabled: true,
     wakeWordEnabled: true,
     autostartEnabled: false,
     selectedDeviceIndex: null,
     selectedVoiceId: 'es-ES-ElviraNeural',
     allApps: [],
-    activeTab: 'tab-chat',
     websocket: null,
+    isListeningVoice: false,
   };
 
-  // DOM Elements
+  // DOM Elements - Launcher & Chat Container
+  const floatingLauncherBtn = document.getElementById('floatingLauncherBtn');
+  const chatbotContainer = document.getElementById('chatbotContainer');
+  const btnCollapseChat = document.getElementById('btnCollapseChat');
+  const btnCloseChat = document.getElementById('btnCloseChat');
+  const btnPinWindow = document.getElementById('btnPinWindow');
+  const pinIcon = document.getElementById('pinIcon');
+  const launcherBadge = document.getElementById('launcherBadge');
+  const wakeStatusText = document.getElementById('wakeStatusText');
+
+  // Chat DOM
   const chatMessages = document.getElementById('chatMessages');
+  const chatBody = document.getElementById('chatBody');
   const userPromptInput = document.getElementById('userPromptInput');
   const btnSendPrompt = document.getElementById('btnSendPrompt');
   const btnVoiceToggle = document.getElementById('btnVoiceToggle');
-  const assistantOrb = document.getElementById('assistantOrb');
-  const wakeStatusPill = document.getElementById('wakeStatusPill');
-  const wakeStatusText = document.getElementById('wakeStatusText');
+  const btnToggleChips = document.getElementById('btnToggleChips');
+  const quickChipsTray = document.getElementById('quickChipsTray');
+  const voiceListeningBanner = document.getElementById('voiceListeningBanner');
+  const welcomeCard = document.getElementById('welcomeCard');
 
-  // Settings DOM
+  // Drawers DOM
+  const btnOpenSettings = document.getElementById('btnOpenSettings');
+  const btnCloseSettings = document.getElementById('btnCloseSettings');
+  const settingsDrawer = document.getElementById('settingsDrawer');
+
+  const btnOpenApps = document.getElementById('btnOpenApps');
+  const btnCloseApps = document.getElementById('btnCloseApps');
+  const appsDrawer = document.getElementById('appsDrawer');
+  const simpleAppsList = document.getElementById('simpleAppsList');
+  const appSearchInput = document.getElementById('appSearchInput');
+
+  // Settings Controls DOM
   const micSelect = document.getElementById('micSelect');
   const btnTestMic = document.getElementById('btnTestMic');
   const micMeterFill = document.getElementById('micMeterFill');
@@ -37,10 +65,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const ttsToggle = document.getElementById('ttsToggle');
   const wakeWordToggle = document.getElementById('wakeWordToggle');
   const autostartToggle = document.getElementById('autostartToggle');
-
-  // Apps DOM
-  const simpleAppsList = document.getElementById('simpleAppsList');
-  const appSearchInput = document.getElementById('appSearchInput');
   const toastBox = document.getElementById('toastBox');
 
   // Toast Helper
@@ -53,42 +77,147 @@ document.addEventListener('DOMContentLoaded', () => {
     }, 3200);
   }
 
-  // Update Status Pill UI
+  // ==========================================================================
+  // Window Visibility Controls (Minimize / Close)
+  // ==========================================================================
+  if (btnCollapseChat) {
+    btnCollapseChat.addEventListener('click', async () => {
+      try {
+        await fetch('/api/window/hide_chat', { method: 'POST' });
+      } catch (e) {
+        console.warn('Error hiding chat:', e);
+      }
+    });
+  }
+
+  if (btnCloseChat) {
+    btnCloseChat.addEventListener('click', async () => {
+      showToast('Cerrando Vanshee por completo...');
+      if (chatbotContainer) chatbotContainer.style.opacity = '0';
+      try {
+        await fetch('/api/system/shutdown', { method: 'POST' });
+      } catch (e) {}
+      setTimeout(() => {
+        try { window.close(); } catch (e) {}
+      }, 250);
+    });
+  }
+
+  // ==========================================================================
+  // Always-On-Top Pin Toggle (Superpuesto a otras aplicaciones en Windows)
+  // ==========================================================================
+  if (btnPinWindow) {
+    btnPinWindow.addEventListener('click', async () => {
+      state.isPinned = !state.isPinned;
+      try {
+        const resp = await fetch('/api/window/pin', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ topmost: state.isPinned })
+        });
+        const res = await resp.json();
+        if (state.isPinned) {
+          btnPinWindow.classList.add('active-pinned');
+          showToast('📌 Chat fijado: siempre visible sobre otras aplicaciones');
+        } else {
+          btnPinWindow.classList.remove('active-pinned');
+          showToast('📌 Modo superpuesto desactivado');
+        }
+      } catch (err) {
+        console.warn('Pin window API error:', err);
+      }
+    });
+  }
+
+  // ==========================================================================
+  // Status Indicator
+  // ==========================================================================
   function updateStatus(status, text, isListening = false) {
-    if (!wakeStatusPill || !wakeStatusText) return;
-    wakeStatusText.textContent = text;
-    if (isListening) {
-      wakeStatusPill.classList.add('listening');
-    } else {
-      wakeStatusPill.classList.remove('listening');
+    state.isListeningVoice = isListening;
+    if (wakeStatusText) {
+      wakeStatusText.textContent = text;
+      if (isListening) {
+        wakeStatusText.style.color = '#fb7185';
+      } else {
+        wakeStatusText.style.color = '#34d399';
+      }
+    }
+    if (launcherBadge) {
+      launcherBadge.textContent = isListening ? '🎙️ Escuchando' : 'Online';
+      launcherBadge.style.background = isListening ? 'var(--danger)' : 'var(--success)';
+    }
+    if (voiceListeningBanner) {
+      voiceListeningBanner.style.display = isListening ? 'flex' : 'none';
+      if (isListening && chatBody) {
+        chatBody.scrollTop = chatBody.scrollHeight;
+      }
     }
   }
 
-  // Append Message to Chat
+  // ==========================================================================
+  // Messages Stream (Intercom / Fin Style)
+  // ==========================================================================
   function appendMessage(sender, text, actionSummary = null) {
     if (!chatMessages) return;
-    const bubble = document.createElement('div');
-    bubble.className = `chat-bubble ${sender}`;
 
-    let html = `<div>${text}</div>`;
-    if (actionSummary && actionSummary !== 'sin_acciones') {
-      html += `<div class="chat-action-tag">⚡ ${actionSummary}</div>`;
+    // Ocultar tarjeta de bienvenida una vez que empieza el chat
+    if (welcomeCard) welcomeCard.style.display = 'none';
+
+    const now = new Date();
+    const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+    const msgDiv = document.createElement('div');
+    msgDiv.className = `chat-msg ${sender === 'user' ? 'user-msg' : 'bot-msg'}`;
+
+    let html = '';
+    if (sender !== 'user') {
+      html += `<div class="msg-avatar">⚡</div>`;
     }
-    bubble.innerHTML = html;
-    chatMessages.appendChild(bubble);
-    chatMessages.scrollTop = chatMessages.scrollHeight;
+
+    html += `<div class="msg-content-wrap">
+      <div class="msg-bubble">${escapeHtml(text)}</div>`;
+
+    if (actionSummary && actionSummary !== 'sin_acciones' && actionSummary !== 'sin_plan') {
+      html += `<div class="action-pill-tag">⚡ ${escapeHtml(actionSummary)}</div>`;
+    }
+
+    html += `<span class="msg-meta">${sender === 'user' ? 'Tú' : 'Vanshee · AI Agent'} · ${timeStr}</span>
+    </div>`;
+
+    msgDiv.innerHTML = html;
+    chatMessages.appendChild(msgDiv);
+
+    if (chatBody) {
+      chatBody.scrollTop = chatBody.scrollHeight;
+    }
   }
 
+  function escapeHtml(unsafe) {
+    return (unsafe || '')
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  }
+
+  // ==========================================================================
   // Execute Command via Natural Language
-  // Execute Command via Natural Language
+  // ==========================================================================
   async function executeCommand(prompt) {
     const clean = prompt.trim();
     if (!clean) return;
 
-    appendMessage('user', clean);
-    if (userPromptInput) userPromptInput.value = '';
+    // Asegurar que el chat esté desplegado
+    setChatOpen(true);
 
-    updateStatus('thinking', 'Banshee está pensando...', false);
+    appendMessage('user', clean);
+    if (userPromptInput) {
+      userPromptInput.value = '';
+      userPromptInput.style.height = 'auto';
+    }
+
+    updateStatus('thinking', 'Vanshee pensando...', false);
 
     try {
       const resp = await fetch('/api/command', {
@@ -102,16 +231,88 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const data = await resp.json();
       if (data.plan_summary !== 'omitido_duplicado') {
-        appendMessage('assistant', data.response_text || 'Comando procesado.', data.plan_summary);
+        appendMessage('assistant', data.response_text || 'Instrucción ejecutada.', data.plan_summary);
       }
-      updateStatus('idle', 'Escuchando "Banshee"...', false);
+      updateStatus('idle', '● Escuchando tu voz', false);
     } catch (err) {
       appendMessage('assistant', 'Hubo un error al procesar tu instrucción.');
-      updateStatus('idle', 'Escuchando "Banshee"...', false);
+      updateStatus('idle', '● Escuchando tu voz', false);
     }
   }
 
-  // Connect WebSocket for Background Wake Word from Python
+  // Enviar mensaje con botón o Enter
+  if (btnSendPrompt && userPromptInput) {
+    btnSendPrompt.addEventListener('click', () => {
+      executeCommand(userPromptInput.value);
+    });
+
+    userPromptInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        executeCommand(userPromptInput.value);
+      }
+    });
+
+    // Auto-ajuste de altura de textarea
+    userPromptInput.addEventListener('input', () => {
+      userPromptInput.style.height = 'auto';
+      userPromptInput.style.height = Math.min(userPromptInput.scrollHeight, 90) + 'px';
+    });
+  }
+
+  // Manual Voice Listen Trigger
+  if (btnVoiceToggle) {
+    btnVoiceToggle.addEventListener('click', async () => {
+      try {
+        btnVoiceToggle.classList.add('listening');
+        updateStatus('listening', '¡Vanshee te escucha!', true);
+        await fetch('/api/audio/wake_trigger', { method: 'POST' });
+        setTimeout(() => {
+          btnVoiceToggle.classList.remove('listening');
+        }, 3000);
+      } catch (err) {
+        console.warn('Wake trigger error:', err);
+      }
+    });
+  }
+
+  // Quick Chips Buttons
+  document.querySelectorAll('.chip-item').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const prompt = btn.dataset.prompt;
+      if (prompt) executeCommand(prompt);
+    });
+  });
+
+  if (btnToggleChips && quickChipsTray) {
+    btnToggleChips.addEventListener('click', () => {
+      quickChipsTray.style.display = (quickChipsTray.style.display === 'none') ? 'flex' : 'none';
+    });
+  }
+
+  // ==========================================================================
+  // Drawers Toggle (Settings & Apps)
+  // ==========================================================================
+  if (btnOpenSettings && settingsDrawer) {
+    btnOpenSettings.addEventListener('click', () => settingsDrawer.classList.add('open'));
+  }
+  if (btnCloseSettings && settingsDrawer) {
+    btnCloseSettings.addEventListener('click', () => settingsDrawer.classList.remove('open'));
+  }
+
+  if (btnOpenApps && appsDrawer) {
+    btnOpenApps.addEventListener('click', () => {
+      appsDrawer.classList.add('open');
+      loadAppsList();
+    });
+  }
+  if (btnCloseApps && appsDrawer) {
+    btnCloseApps.addEventListener('click', () => appsDrawer.classList.remove('open'));
+  }
+
+  // ==========================================================================
+  // WebSocket Live Sync for Background Wake Word
+  // ==========================================================================
   function connectWebSocket() {
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${proto}//${window.location.host}/ws/live`;
@@ -121,19 +322,22 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
           const msg = JSON.parse(event.data);
           if (msg.type === 'wake_word_command') {
-            updateStatus('thinking', `Banshee ejecutando: "${msg.data.command}"`, false);
+            setChatOpen(true);
+            updateStatus('thinking', `Ejecutando: "${msg.data.command}"`, false);
             appendMessage('user', msg.data.phrase);
           } else if (msg.type === 'wake_word_listening') {
-            updateStatus('listening', '¡Banshee te escucha!', true);
-            appendMessage('assistant', '¿Dime? Te escucho...');
+            setChatOpen(true);
+            updateStatus('listening', '¡Vanshee te escucha!', true);
           } else if (msg.type === 'command_completed') {
-            // Solo agregar mensaje si provino de detección de voz en segundo plano (para no duplicar con fetch)
             if (msg.data.source === 'wake_word') {
               appendMessage('assistant', msg.data.response_text, msg.data.plan_summary);
             }
-            updateStatus('idle', 'Escuchando "Banshee"...', false);
+            updateStatus('idle', '● Escuchando tu voz', false);
           }
         } catch (e) {}
+      };
+      ws.onclose = () => {
+        setTimeout(connectWebSocket, 3000);
       };
       state.websocket = ws;
     } catch (e) {
@@ -141,291 +345,93 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  // Load Audio Devices
+  // ==========================================================================
+  // Load Audio Devices & Voices
+  // ==========================================================================
   async function loadAudioDevices() {
     if (!micSelect) return;
     try {
       const resp = await fetch('/api/audio/devices');
       const data = await resp.json();
-
       micSelect.innerHTML = '';
-      if (!data.devices || data.devices.length === 0) {
-        micSelect.innerHTML = '<option value="">No se encontraron micrófonos</option>';
-        return;
-      }
-
-      data.devices.forEach(d => {
+      (data.devices || []).forEach(d => {
         const opt = document.createElement('option');
         opt.value = d.index;
-        opt.textContent = `${d.name} ${d.is_default ? '(Predeterminado de Windows)' : ''}`;
-        if (d.is_selected) {
-          opt.selected = true;
-          state.selectedDeviceIndex = d.index;
-        }
+        opt.textContent = `${d.name} ${d.is_default ? '(Predeterminado)' : ''}`;
+        if (d.is_selected) opt.selected = true;
         micSelect.appendChild(opt);
       });
-    } catch (e) {
-      micSelect.innerHTML = '<option value="">Error cargando micrófonos</option>';
-    }
+    } catch (err) {}
   }
 
-  // Load Natural Voices
-  async function loadVoices() {
-    if (!voiceSelect) return;
-    try {
-      const resp = await fetch('/api/audio/voices');
-      const data = await resp.json();
-
-      if (data.voices && data.voices.length > 0) {
-        voiceSelect.innerHTML = '';
-        data.voices.forEach(v => {
-          const opt = document.createElement('option');
-          opt.value = v.id;
-          opt.textContent = v.name;
-          if (v.id === data.current_voice) {
-            opt.selected = true;
-            state.selectedVoiceId = v.id;
-          }
-          voiceSelect.appendChild(opt);
-        });
-      }
-    } catch (e) {}
-  }
-
-  // Load Autostart Setting
-  async function loadAutostart() {
-    if (!autostartToggle) return;
-    try {
-      const resp = await fetch('/api/settings/autostart');
-      const data = await resp.json();
-      autostartToggle.checked = data.enabled;
-      state.autostartEnabled = data.enabled;
-    } catch (e) {}
-  }
-
-  // Load Apps for Simple Launcher
-  async function loadApps(query = '') {
-    if (!simpleAppsList) return;
-    try {
-      const resp = await fetch(`/api/apps?query=${encodeURIComponent(query)}`);
-      const data = await resp.json();
-      state.allApps = data.apps || [];
-      renderSimpleApps(state.allApps);
-    } catch (e) {
-      simpleAppsList.innerHTML = '<p style="color: var(--text-muted);">Error cargando aplicaciones.</p>';
-    }
-  }
-
-  function renderSimpleApps(apps) {
-    if (!simpleAppsList) return;
-    if (apps.length === 0) {
-      simpleAppsList.innerHTML = '<p style="color: var(--text-muted); padding: 10px;">No se encontraron aplicaciones.</p>';
-      return;
-    }
-
-    simpleAppsList.innerHTML = apps.map(app => `
-      <div class="simple-app-card" data-target="${app.target}">
-        <strong title="${app.name}">${app.name}</strong>
-        <button class="btn-open-app">Abrir</button>
-      </div>
-    `).join('');
-
-    simpleAppsList.querySelectorAll('.simple-app-card').forEach(card => {
-      card.addEventListener('click', async () => {
-        const target = card.getAttribute('data-target');
-        showToast(`Abriendo ${target}...`);
-        await fetch('/api/apps/launch', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ target })
-        });
-      });
-    });
-  }
-
-  // Test Microphone Level with 3-Second Recording and Playback
-  let recommendedRms = null;
-
-  async function testMicrophoneLevel() {
-    if (!btnTestMic) return;
-    btnTestMic.disabled = true;
-    let secondsLeft = 3;
-    btnTestMic.innerHTML = `🔴 Grabando... Habla ahora (${secondsLeft}s)`;
-    if (micMeterText) {
-      micMeterText.textContent = 'Grabando voz (3s)...';
-      micMeterText.style.color = 'var(--warning)';
-    }
-
-    const timer = setInterval(() => {
-      secondsLeft--;
-      if (secondsLeft > 0) {
-        btnTestMic.innerHTML = `🔴 Grabando... Habla ahora (${secondsLeft}s)`;
-      } else {
-        btnTestMic.innerHTML = '⚙️ Analizando y preparando audio...';
-      }
-    }, 1000);
-
-    const selectedDev = micSelect ? micSelect.value : null;
-
-    try {
-      const body = new URLSearchParams();
-      body.append('duration', '3.0');
-      if (selectedDev !== null && selectedDev !== '') {
-        body.append('device_index', selectedDev);
-      }
-
-      const resp = await fetch('/api/audio/test_mic', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: body.toString()
-      });
-      clearInterval(timer);
-      const data = await resp.json();
-
-      btnTestMic.disabled = false;
-      btnTestMic.innerHTML = '🎙️ Realizar Otra Prueba de Audio (3s)';
-
-      if (micMeterFill) micMeterFill.style.width = `${data.level_percent}%`;
-      if (micMeterText) {
-        micMeterText.textContent = `${data.rms} RMS`;
-        micMeterText.style.color = data.rms >= 75 ? 'var(--success)' : (data.rms >= 40 ? 'var(--warning)' : 'var(--danger)');
-      }
-
-      // Mostrar reproductor y diagnóstico
-      if (micPlaybackWrap) {
-        micPlaybackWrap.style.display = 'flex';
-      }
-      if (micAudioPlayer && data.audio_url) {
-        micAudioPlayer.src = data.audio_url;
-        // Reproducir automáticamente para que el usuario escuche de inmediato cómo suena su micrófono
-        try {
-          await micAudioPlayer.play();
-        } catch (e) {
-          console.log('Autoplay bloqueado por el navegador, el usuario puede dar play manual.');
-        }
-      }
-      if (micQualityBadge) {
-        micQualityBadge.textContent = data.status;
-        micQualityBadge.style.color = data.rms >= 75 ? 'var(--success)' : (data.rms >= 40 ? 'var(--warning)' : 'var(--danger)');
-        micQualityBadge.style.background = data.rms >= 75 ? 'rgba(34, 197, 94, 0.15)' : 'rgba(234, 179, 8, 0.15)';
-      }
-      if (micAdviceBox) {
-        micAdviceBox.textContent = `💡 Diagnóstico: ${data.advice}`;
-      }
-
-      recommendedRms = data.recommended_threshold;
-      if (btnApplyRecommended && recommendedRms) {
-        btnApplyRecommended.style.display = 'block';
-        btnApplyRecommended.textContent = `⚡ Aplicar Sensibilidad Recomendada (${recommendedRms} RMS)`;
-      }
-
-      showToast(`Prueba completada: ${data.rms} RMS. Reproduciendo audio...`);
-    } catch (e) {
-      clearInterval(timer);
-      btnTestMic.disabled = false;
-      btnTestMic.innerHTML = '🎙️ Iniciar Prueba de Grabación y Audio (3s)';
-      showToast('Error en prueba de micrófono.');
-    }
-  }
-
-  // Event Listeners
-  if (btnSendPrompt && userPromptInput) {
-    btnSendPrompt.addEventListener('click', () => executeCommand(userPromptInput.value));
-    userPromptInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') executeCommand(userPromptInput.value);
-    });
-  }
-
-  // Manual Wake Trigger (Mic Button or Orb)
-  async function triggerManualWake() {
-    updateStatus('listening', '¡Banshee te escucha!', true);
-    showToast('Banshee te escucha. Habla tu orden ahora...');
-    try {
-      await fetch('/api/audio/wake_trigger', { method: 'POST' });
-    } catch (e) {}
-  }
-
-  if (btnVoiceToggle) {
-    btnVoiceToggle.addEventListener('click', triggerManualWake);
-  }
-
-  if (assistantOrb) {
-    assistantOrb.addEventListener('click', triggerManualWake);
-  }
-
-  // Quick Action Chips
-  document.querySelectorAll('.chip-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const p = btn.getAttribute('data-prompt') || btn.textContent.trim();
-      executeCommand(p);
-    });
-  });
-
-  // Tab Navigation
-  document.querySelectorAll('.nav-link').forEach(link => {
-    link.addEventListener('click', () => {
-      document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active'));
-      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-
-      link.classList.add('active');
-      const tabId = link.getAttribute('data-tab');
-      const targetPane = document.getElementById(tabId);
-      if (targetPane) targetPane.classList.add('active');
-      state.activeTab = tabId;
-
-      if (tabId === 'tab-settings') {
-        loadAudioDevices();
-        loadVoices();
-        loadAutostart();
-      } else if (tabId === 'tab-apps') {
-        loadApps();
-      }
-    });
-  });
-
-  // Settings Change Handlers
   if (micSelect) {
-    micSelect.addEventListener('change', async (e) => {
-      const idx = e.target.value !== '' ? parseInt(e.target.value) : null;
-      const optName = e.target.options[e.target.selectedIndex]?.text || '';
+    micSelect.addEventListener('change', async () => {
+      const idx = parseInt(micSelect.value, 10);
+      const selOpt = micSelect.options[micSelect.selectedIndex];
       await fetch('/api/audio/devices/select', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ device_index: idx, device_name: optName })
+        body: JSON.stringify({ device_index: idx, device_name: selOpt ? selOpt.textContent : '' })
       });
-      showToast(`Micrófono configurado: ${optName}`);
+      showToast('Micrófono actualizado.');
     });
   }
 
+  // Mic 3s Recording Test with Audio Player
   if (btnTestMic) {
-    btnTestMic.addEventListener('click', testMicrophoneLevel);
-  }
+    btnTestMic.addEventListener('click', async () => {
+      btnTestMic.disabled = true;
+      btnTestMic.textContent = '🔴 Grabando tu voz (3s)... Habla ahora';
+      if (micMeterText) micMeterText.textContent = 'Grabando...';
+      if (micMeterFill) micMeterFill.style.width = '60%';
+      if (micPlaybackWrap) micPlaybackWrap.style.display = 'none';
 
-  if (btnApplyRecommended) {
-    btnApplyRecommended.addEventListener('click', async () => {
-      if (!recommendedRms) return;
-      if (thresholdSlider) thresholdSlider.value = recommendedRms;
-      if (thresholdDisplay) thresholdDisplay.textContent = `${recommendedRms} RMS`;
-      await fetch('/api/settings/update', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          speak_tts: state.ttsEnabled,
-          threshold_rms: recommendedRms
-        })
-      });
-      showToast(`Sensibilidad recomendada guardada: ${recommendedRms} RMS`);
-      btnApplyRecommended.style.display = 'none';
+      try {
+        const devIdx = micSelect ? micSelect.value : null;
+        const resp = await fetch('/api/audio/mic_record_test', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            device_index: devIdx ? parseInt(devIdx, 10) : null,
+            duration_seconds: 3.0
+          })
+        });
+        const data = await resp.json();
+        btnTestMic.disabled = false;
+        btnTestMic.textContent = '🎙️ Realizar Otra Prueba de Audio';
+
+        if (data.status === 'ok') {
+          if (micMeterFill) micMeterFill.style.width = Math.min(data.volume_rms * 1.5, 100) + '%';
+          if (micMeterText) micMeterText.textContent = `Volumen: ${data.volume_rms} RMS (${data.quality_verdict})`;
+          if (micPlaybackWrap && micAudioPlayer) {
+            micPlaybackWrap.style.display = 'block';
+            micAudioPlayer.src = data.audio_url;
+            micAudioPlayer.play().catch(() => {});
+          }
+          if (micQualityBadge) {
+            micQualityBadge.textContent = data.quality_verdict;
+            micQualityBadge.className = data.quality_verdict.includes('Óptimo') || data.quality_verdict.includes('Excelente') ? 'badge-optimal' : 'badge-optimal';
+          }
+          if (micAdviceBox) micAdviceBox.textContent = data.advice;
+          if (btnApplyRecommended) {
+            btnApplyRecommended.onclick = async () => {
+              if (thresholdSlider) thresholdSlider.value = data.recommended_threshold;
+              if (thresholdDisplay) thresholdDisplay.textContent = `${data.recommended_threshold} RMS`;
+              await saveThresholdSetting(data.recommended_threshold);
+              showToast(`Sensibilidad aplicada: ${data.recommended_threshold} RMS`);
+            };
+          }
+        }
+      } catch (err) {
+        btnTestMic.disabled = false;
+        btnTestMic.textContent = '🎙️ Iniciar Prueba de Grabación (3s)';
+      }
     });
   }
 
-  if (thresholdSlider) {
-    thresholdSlider.addEventListener('input', (e) => {
-      if (thresholdDisplay) thresholdDisplay.textContent = `${e.target.value} RMS`;
-    });
-    thresholdSlider.addEventListener('change', async (e) => {
-      const val = parseFloat(e.target.value);
-      await fetch('/api/settings/update', {
+  async function saveThresholdSetting(val) {
+    try {
+      await fetch('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -433,105 +439,117 @@ document.addEventListener('DOMContentLoaded', () => {
           threshold_rms: val
         })
       });
-      showToast(`Sensibilidad guardada: ${val} RMS`);
+    } catch (e) {}
+  }
+
+  if (thresholdSlider) {
+    thresholdSlider.addEventListener('input', () => {
+      if (thresholdDisplay) thresholdDisplay.textContent = `${thresholdSlider.value} RMS`;
+    });
+    thresholdSlider.addEventListener('change', () => {
+      saveThresholdSetting(parseFloat(thresholdSlider.value));
     });
   }
 
-  if (voiceSelect) {
-    voiceSelect.addEventListener('change', async (e) => {
-      const vId = e.target.value;
-      state.selectedVoiceId = vId;
-      await fetch('/api/audio/voices/select', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ voice_id: vId })
-      });
-      showToast('Voz de Banshee actualizada.');
-    });
-  }
-
-  if (btnTestVoice) {
+  // Voice Test
+  if (btnTestVoice && voiceSelect) {
     btnTestVoice.addEventListener('click', async () => {
-      btnTestVoice.disabled = true;
-      btnTestVoice.innerHTML = '🗣️ Hablando...';
-      const vId = voiceSelect ? voiceSelect.value : state.selectedVoiceId;
-      await fetch('/api/audio/tts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: `text=${encodeURIComponent('Hola, soy Banshee. Esta es mi voz natural.')}&voice_id=${encodeURIComponent(vId)}`
-      });
-      btnTestVoice.disabled = false;
-      btnTestVoice.innerHTML = '▶ Escuchar Voz de Prueba';
+      const v = voiceSelect.value;
+      const formData = new FormData();
+      formData.append('text', 'Hola, soy Vanshee. Tu asistente de Windows configurada y lista.');
+      formData.append('voice_id', v);
+      await fetch('/api/audio/tts', { method: 'POST', body: formData });
     });
   }
 
+  // Toggles
   if (ttsToggle) {
-    ttsToggle.addEventListener('change', async (e) => {
-      state.ttsEnabled = e.target.checked;
-      await fetch('/api/settings/update', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          speak_tts: state.ttsEnabled,
-          threshold_rms: thresholdSlider ? parseFloat(thresholdSlider.value) : 180.0
-        })
-      });
-      showToast(state.ttsEnabled ? 'Voz de respuesta activada.' : 'Voz de respuesta silenciada.');
+    ttsToggle.addEventListener('change', () => {
+      state.ttsEnabled = ttsToggle.checked;
+      saveThresholdSetting(thresholdSlider ? parseFloat(thresholdSlider.value) : 100);
+      showToast(state.ttsEnabled ? 'Voz hablada activada.' : 'Voz hablada silenciada.');
     });
   }
-
   if (wakeWordToggle) {
-    wakeWordToggle.addEventListener('change', async (e) => {
-      state.wakeWordEnabled = e.target.checked;
+    wakeWordToggle.addEventListener('change', async () => {
+      state.wakeWordEnabled = wakeWordToggle.checked;
       await fetch('/api/settings/wakeword', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ enabled: state.wakeWordEnabled })
       });
-      updateStatus(
-        state.wakeWordEnabled ? 'idle' : 'muted',
-        state.wakeWordEnabled ? 'Escuchando "Banshee"...' : 'Activación por voz desactivada'
-      );
-      showToast(state.wakeWordEnabled ? 'Escucha de "Banshee" activada.' : 'Activación por voz pausada.');
+      showToast(state.wakeWordEnabled ? 'Activación por voz activada.' : 'Activación por voz desactivada.');
     });
   }
-
   if (autostartToggle) {
-    autostartToggle.addEventListener('change', async (e) => {
-      const en = e.target.checked;
-      const resp = await fetch('/api/settings/autostart', {
+    autostartToggle.addEventListener('change', async () => {
+      state.autostartEnabled = autostartToggle.checked;
+      await fetch('/api/settings/autostart', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled: en })
+        body: JSON.stringify({ enabled: state.autostartEnabled })
       });
+      showToast(state.autostartEnabled ? 'Inicio con Windows activado.' : 'Inicio con Windows desactivado.');
+    });
+  }
+
+  // Load Indexed Apps
+  async function loadAppsList() {
+    if (!simpleAppsList) return;
+    try {
+      const resp = await fetch('/api/apps');
       const data = await resp.json();
-      showToast(data.enabled ? 'Banshee se iniciará con Windows.' : 'Inicio automático desactivado.');
+      state.allApps = data.apps || [];
+      renderApps(state.allApps);
+    } catch (e) {}
+  }
+
+  function renderApps(apps) {
+    if (!simpleAppsList) return;
+    simpleAppsList.innerHTML = '';
+    apps.slice(0, 50).forEach(app => {
+      const card = document.createElement('div');
+      card.className = 'app-compact-card';
+      card.innerHTML = `
+        <div class="app-compact-info">
+          <span class="app-compact-name">${escapeHtml(app.name)}</span>
+          <span class="app-compact-type">${escapeHtml(app.type || 'app')}</span>
+        </div>
+        <span style="color: var(--primary); font-size: 14px;">▶</span>
+      `;
+      card.addEventListener('click', () => {
+        executeCommand(`Abre ${app.name}`);
+        if (appsDrawer) appsDrawer.classList.remove('open');
+      });
+      simpleAppsList.appendChild(card);
     });
   }
 
-  // App Search
   if (appSearchInput) {
-    appSearchInput.addEventListener('input', (e) => {
-      const q = e.target.value.toLowerCase();
-      renderSimpleApps(state.allApps.filter(a => a.name.toLowerCase().includes(q)));
+    appSearchInput.addEventListener('input', () => {
+      const q = appSearchInput.value.toLowerCase().trim();
+      const filtered = state.allApps.filter(a => a.name.toLowerCase().includes(q));
+      renderApps(filtered);
     });
   }
 
-  async function loadInitialStatus() {
+  // Load Initial Status
+  async function initStatus() {
     try {
       const resp = await fetch('/api/status');
       const data = await resp.json();
-      if (data.threshold_rms && thresholdSlider) {
-        thresholdSlider.value = data.threshold_rms;
-        if (thresholdDisplay) thresholdDisplay.textContent = `${data.threshold_rms} RMS`;
-      }
+      if (thresholdSlider) thresholdSlider.value = data.threshold_rms || 100;
+      if (thresholdDisplay) thresholdDisplay.textContent = `${data.threshold_rms || 100} RMS`;
+      if (voiceSelect && data.selected_voice) voiceSelect.value = data.selected_voice;
+      if (wakeWordToggle) wakeWordToggle.checked = data.wakeword_enabled !== false;
+      if (autostartToggle) autostartToggle.checked = !!data.autostart_enabled;
+      if (ttsToggle) ttsToggle.checked = data.speak_tts_enabled !== false;
+      state.ttsEnabled = data.speak_tts_enabled !== false;
     } catch (e) {}
   }
 
   // Initialize
-  loadInitialStatus();
   loadAudioDevices();
-  loadVoices();
-  loadAutostart();
+  initStatus();
   connectWebSocket();
 });

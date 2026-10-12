@@ -58,13 +58,13 @@ class TestEditorBridgeAndMCP(unittest.TestCase):
         adapter = EditorAdapter(window_manager=mock_wm, hub=self.hub)
 
         # Simular que el RPC responde de inmediato con éxito
-        def mock_send(prompt, editor_hint="", timeout=3.0):
+        def mock_send(prompt, editor_hint="", timeout=4.0, **kwargs):
             return True
 
         with patch.object(self.hub, "send_prompt", side_effect=mock_send):
             success, msg = adapter.send_prompt_to_agent("Escribe hola mundo", target_hint="antigravity")
             self.assertTrue(success)
-            self.assertIn("Prompt inyectado directamente", msg)
+            self.assertIn("Prompt enviado directamente al agente", msg)
             # No debió llamar a la simulación UI
             mock_wm.type_and_send_prompt.assert_not_called()
 
@@ -131,6 +131,83 @@ class TestEditorBridgeAndMCP(unittest.TestCase):
         success = executor.execute_pipeline(pipeline)
         self.assertTrue(success)
         executor.editor_adapter.send_prompt_to_agent.assert_called_with("Crea un endpoint en FastAPI", target_hint="antigravity")
+
+    def test_06_dile_a_antigravity_nlu_and_voice_deduplication(self):
+        """Verifica que 'dile a antigravity <msg>' se parsee sin 'dile' y no duplique voz en Brain."""
+        from src.nlu.intent_parser import IntentParser
+        from src.brain import VansheeBrain
+
+        parser = IntentParser()
+        pipeline = parser.parse("dile a antigravity hola esto es una prueba")
+        self.assertEqual(len(pipeline.steps), 2)
+        self.assertEqual(pipeline.steps[0].intent, "OPEN_APP")
+        self.assertEqual(pipeline.steps[0].target, "antigravity")
+        self.assertEqual(pipeline.steps[1].intent, "WRITE_TEXT")
+        self.assertEqual(pipeline.steps[1].target, "antigravity")
+        self.assertEqual(pipeline.steps[1].parameters.content, "hola esto es una prueba")
+
+        # Verificar que OSExecutor con interactive_voice=False no invoque tts.speak internamente
+        mock_tts = MagicMock()
+        executor = OSExecutor(tts=mock_tts, interactive_voice=False)
+        executor.window_manager.find_and_focus = MagicMock(return_value=(True, "Antigravity IDE"))
+        executor.editor_adapter.send_prompt_to_agent = MagicMock(return_value=(True, "Prompt enviado"))
+
+        brain = VansheeBrain(tts=mock_tts, parser=parser, executor=executor, speak_tts=True)
+        res = brain.handle_user_input("dile a antigravity hola esto es una prueba")
+
+        self.assertTrue(res.success)
+        # La voz debe llamarse EXACTAMENTE UNA VEZ por Brain al finalizar, no repetirse
+        self.assertEqual(mock_tts.speak.call_count, 1)
+
+    def test_07_window_manager_excludes_vanshee_self_windows(self):
+        """Verifica que WindowManager diferencie ventanas propias de Vanshee del editor Antigravity."""
+        from src.executor.window_manager import WindowManager
+        wm = WindowManager()
+
+        self.assertTrue(wm._is_self_window("Vanshee Chat"))
+        self.assertTrue(wm._is_self_window("Vanshee Bubble"))
+        self.assertTrue(wm._is_self_window("Vanshee Launcher"))
+        self.assertTrue(wm._is_self_window("Vanshee"))
+
+        # Ventana de Antigravity IDE con el workspace abierto 'vanshee-core' NO debe ser excluida
+        self.assertFalse(wm._is_self_window("vanshee-core - Antigravity IDE - window_manager.py"))
+        self.assertFalse(wm._is_self_window("Antigravity IDE"))
+
+    def test_08_editor_status_intent_and_generic_hints(self):
+        """Verifica la resolución de hints genéricos de editor y el comando de estado de editores."""
+        from src.nlu.intent_parser import IntentParser
+
+        self.hub.register_session(
+            session_id="test_sess_8",
+            editor_name="antigravity",
+            ws=self.mock_ws,
+            metadata={"active_file": "main.py"}
+        )
+
+        # 1. get_active_session debe resolver con 'editor', 'el editor', 'agente', etc.
+        s1 = self.hub.get_active_session("editor")
+        self.assertIsNotNone(s1)
+        self.assertEqual(s1.editor_name, "antigravity")
+
+        s2 = self.hub.get_active_session("el agente")
+        self.assertIsNotNone(s2)
+        self.assertEqual(s2.editor_name, "antigravity")
+
+        # 2. Parsing de comandos de estado de editores
+        parser = IntentParser()
+        p1 = parser.parse("conéctate al editor de código")
+        self.assertEqual(len(p1.steps), 1)
+        self.assertEqual(p1.steps[0].intent, "EDITOR_STATUS")
+
+        p2 = parser.parse("revisa la conexión con los editores")
+        self.assertEqual(len(p2.steps), 1)
+        self.assertEqual(p2.steps[0].intent, "EDITOR_STATUS")
+
+        p3 = parser.parse("envia el prompt al agente: crea una función de suma")
+        self.assertEqual(len(p3.steps), 1)
+        self.assertEqual(p3.steps[0].intent, "WRITE_TEXT")
+        self.assertEqual(p3.steps[0].target, "antigravity")
+        self.assertEqual(p3.steps[0].parameters.content, "crea una función de suma")
 
 
 if __name__ == "__main__":

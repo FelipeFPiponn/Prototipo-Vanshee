@@ -1,8 +1,9 @@
 import os
+import sys
 from pathlib import Path
 from pydantic_settings import BaseSettings
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+BASE_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent.parent
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "V.ANSHEE Core"

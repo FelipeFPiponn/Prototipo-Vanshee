@@ -9,6 +9,7 @@ import time
 import json
 import asyncio
 import threading
+import concurrent.futures
 from typing import Dict, Any, Optional, List, Callable
 from dataclasses import dataclass, field
 
@@ -26,6 +27,7 @@ class EditorSession:
     connected_at: float = field(default_factory=time.time)
     last_ping: float = field(default_factory=time.time)
     websocket: Any = None               # Referencia al WebSocket de FastAPI
+    loop: Any = None                    # Event loop del servidor WebSocket
 
 
 class EditorHub:
@@ -33,12 +35,12 @@ class EditorHub:
 
     def __init__(self):
         self.sessions: Dict[str, EditorSession] = {}
-        self._pending_rpc: Dict[str, asyncio.Future] = {}
+        self._pending_rpc: Dict[str, concurrent.futures.Future] = {}
         self._rpc_counter: int = 0
         self._lock = threading.RLock()
         self._on_context_change_callbacks: List[Callable[[Dict[str, Any]], None]] = []
 
-    def register_session(self, session_id: str, editor_name: str, ws: Any, metadata: Dict[str, Any] = None) -> EditorSession:
+    def register_session(self, session_id: str, editor_name: str, ws: Any, metadata: Dict[str, Any] = None, loop: Any = None) -> EditorSession:
         """Registra un nuevo editor conectado por WebSocket."""
         meta = metadata or {}
         session = EditorSession(
@@ -51,6 +53,7 @@ class EditorHub:
             cursor_line=meta.get("cursor_line", 1),
             cursor_column=meta.get("cursor_column", 1),
             websocket=ws,
+            loop=loop,
         )
         with self._lock:
             self.sessions[session_id] = session
@@ -106,7 +109,13 @@ class EditorHub:
             if not self.sessions:
                 return None
             hint = editor_hint.lower().strip()
-            if hint:
+            # Términos genéricos que refieren al editor actualmente activo
+            generic_terms = [
+                "editor", "el editor", "codigo", "código", "editor de codigo", 
+                "editor de código", "agente", "el agente", "agente de codigo", 
+                "agente de código", "ide", "active", "prompt"
+            ]
+            if hint and hint not in generic_terms:
                 for s in self.sessions.values():
                     if hint in s.editor_name or s.editor_name in hint:
                         return s
@@ -136,13 +145,18 @@ class EditorHub:
     # Métodos RPC de Alto Nivel para OSExecutor
     # =========================================================================
 
-    def send_prompt(self, prompt: str, editor_hint: str = "", timeout: float = 3.0) -> bool:
-        """Envía un prompt directamente al panel de chat/agente del editor conectado."""
+    def send_prompt(self, prompt: str, editor_hint: str = "", mode: str = "agent", timeout: float = 4.0) -> bool:
+        """Envía un prompt directamente al agente del editor conectado en Modo Agente (ejecución directa)."""
         session = self.get_active_session(editor_hint)
         if not session:
             return False
 
-        res = self._execute_sync_rpc(session, "send_prompt", {"prompt": prompt}, timeout=timeout)
+        res = self._execute_sync_rpc(
+            session,
+            "send_prompt",
+            {"prompt": prompt, "mode": mode},
+            timeout=timeout
+        )
         return bool(res and res.get("success", False))
 
     def insert_code(self, code: str, file_path: str = "", editor_hint: str = "", timeout: float = 3.0) -> bool:
@@ -209,39 +223,37 @@ class EditorHub:
             "params": params,
         }
 
-        future = asyncio.Future()
+        future = concurrent.futures.Future()
         self._pending_rpc[req_id] = future
 
-        # Enviar mensaje a través del WebSocket en el bucle de eventos activo
+        # Enviar mensaje a través del WebSocket en el bucle de eventos del servidor
         try:
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                loop = None
+            loop = session.loop
+            if not loop or not loop.is_running():
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    loop = None
 
             send_coro = session.websocket.send_json(message)
             if loop and loop.is_running():
                 asyncio.run_coroutine_threadsafe(send_coro, loop)
             else:
-                # Si estamos en un hilo sin bucle, creamos uno temporal o despachamos
                 asyncio.run(send_coro)
         except Exception as e:
             print(f"[EditorHub Error] No se pudo enviar mensaje RPC a '{session.editor_name}': {e}")
             self._pending_rpc.pop(req_id, None)
             return None
 
-        # Esperar respuesta con timeout
-        start = time.time()
-        while not future.done():
-            if time.time() - start > timeout:
-                self._pending_rpc.pop(req_id, None)
-                print(f"[EditorHub Warning] Timeout ({timeout}s) esperando respuesta RPC de '{session.editor_name}'")
-                return None
-            time.sleep(0.01)
-
+        # Esperar respuesta con timeout atómico
         try:
-            return future.result()
-        except Exception:
+            return future.result(timeout=timeout)
+        except concurrent.futures.TimeoutError:
+            self._pending_rpc.pop(req_id, None)
+            print(f"[EditorHub Warning] Timeout ({timeout}s) esperando respuesta RPC de '{session.editor_name}'")
+            return None
+        except Exception as e:
+            self._pending_rpc.pop(req_id, None)
             return None
 
 

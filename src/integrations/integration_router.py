@@ -14,6 +14,7 @@ from src.integrations.discord_client import discord_client
 from src.integrations.obs_controller import obs_controller
 from src.integrations.hardware_monitor import hardware_monitor
 from src.integrations.obsidian_client import obsidian_client
+from src.integrations.git_manager import git_manager
 
 
 class IntegrationRouter:
@@ -28,6 +29,7 @@ class IntegrationRouter:
         self.obs = obs_controller
         self.hardware = hardware_monitor
         self.obsidian = obsidian_client
+        self.git = git_manager
 
     def execute_direct_action(self, action_type: str, target: str = "", params: Dict[str, Any] = None) -> Tuple[bool, str]:
         """Despacha la acción a la integración correspondiente."""
@@ -129,6 +131,29 @@ class IntegrationRouter:
         elif action == "OBSIDIAN_TODO":
             task_text = p.get("content", target)
             return self.obsidian.add_todo_task(task_text)
+
+        # 7. Git & Control de Versiones
+        elif action == "GIT_STATUS":
+            success, msg, _ = self.git.get_status()
+            return success, msg
+
+        elif action == "GIT_COMMIT":
+            custom_msg = p.get("content", "")
+            return self.git.auto_commit(custom_message=custom_msg)
+
+        elif action == "GIT_PUSH":
+            return self.git.push()
+
+        elif action == "GIT_PULL":
+            return self.git.pull()
+
+        elif action == "GIT_DIFF":
+            return self.git.get_diff()
+
+        elif action == "GIT_BRANCH":
+            act = target or "current"
+            branch_name = p.get("content", "")
+            return self.git.branch(action=act, branch_name=branch_name)
 
         return False, f"Acción directa '{action_type}' no reconocida."
 

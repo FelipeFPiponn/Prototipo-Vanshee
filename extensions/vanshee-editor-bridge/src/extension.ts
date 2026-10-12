@@ -83,8 +83,8 @@ function connectToVanshee(context: vscode.ExtensionContext) {
             scheduleReconnect(context);
         });
 
-        wsClient.on('error', (err) => {
-            console.warn('[V.ANSHEE Bridge Warning] Error de conexión:', err.message);
+        wsClient.on('error', (err: any) => {
+            console.warn('[V.ANSHEE Bridge Warning] Error de conexión:', err?.message || err);
             statusBarItem.text = '$(alert) V.ANSHEE: Error';
             statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
         });
@@ -161,20 +161,102 @@ async function handleIncomingRpc(req: any) {
     try {
         if (method === 'send_prompt') {
             const prompt = params.prompt || '';
-            // Intentar abrir el chat nativo o enfocar la vista del agente de IA
+            const mode = params.mode || 'agent';
+            let opened = false;
+            let delivered = false;
+
+            // 1. Antigravity IDE y VS Code Chat en Modo Agente nativo (mode: 'agent' + submit directo)
             try {
-                await vscode.commands.executeCommand('workbench.action.chat.open');
-            } catch (e) {
-                // Fallback si el comando de chat difiere
+                // Al pasar mode: 'agent' y isPartialQuery: false, VS Code / Antigravity cambia el chat al modo Agente
+                // y ejecuta automáticamente acceptInput() enviando el prompt de forma inmediata (no como mensaje/borrador).
+                await vscode.commands.executeCommand('workbench.action.chat.open', {
+                    mode: 'agent',
+                    query: prompt,
+                    isPartialQuery: false
+                });
+                opened = true;
+                delivered = true;
+                console.log('[V.ANSHEE Bridge] Prompt enviado directamente al Agente (workbench.action.chat.open mode=agent)');
+            } catch (err) {
+                console.warn('[V.ANSHEE Bridge] workbench.action.chat.open con mode=agent no disponible:', err);
             }
-            // Inyectar en el clipboard o notificar
-            await vscode.env.clipboard.writeText(prompt);
-            vscode.window.showInformationMessage(`[V.ANSHEE] Prompt recibido: "${prompt}" (Copiado al portapapeles)`);
+
+            // 2. VS Code Copilot Edits / Sesión de Agente de edición
+            if (!delivered) {
+                try {
+                    await vscode.commands.executeCommand('workbench.action.chat.openEditSession', {
+                        query: prompt,
+                        isPartialQuery: false
+                    });
+                    opened = true;
+                    delivered = true;
+                    console.log('[V.ANSHEE Bridge] Prompt enviado vía workbench.action.chat.openEditSession');
+                } catch (err) {
+                    console.warn('[V.ANSHEE Bridge] workbench.action.chat.openEditSession no disponible:', err);
+                }
+            }
+
+            // 3. Cursor Composer en Modo Agente
+            if (!delivered) {
+                try {
+                    await vscode.commands.executeCommand('cursor.composer.open', { text: prompt });
+                    opened = true;
+                    delivered = true;
+                    try {
+                        await vscode.commands.executeCommand('cursor.action.composer.agent');
+                    } catch {}
+                    try {
+                        await vscode.commands.executeCommand('workbench.action.chat.submit');
+                    } catch {}
+                    console.log('[V.ANSHEE Bridge] Prompt enviado a Cursor Composer');
+                } catch (err) {
+                    console.warn('[V.ANSHEE Bridge] cursor.composer.open no disponible:', err);
+                }
+            }
+
+            // 4. Windsurf Cascade (Agente de Windsurf)
+            if (!delivered) {
+                try {
+                    await vscode.commands.executeCommand('windsurf.cascade.focus');
+                    opened = true;
+                    delivered = true;
+                    try {
+                        await vscode.commands.executeCommand('workbench.action.chat.submit');
+                    } catch {}
+                    console.log('[V.ANSHEE Bridge] Prompt enfocado en Windsurf Cascade');
+                } catch {}
+            }
+
+            // 5. Fallback general: workbench.action.chat.open asegurando no quedar como mensaje sin enviar
+            if (!delivered) {
+                try {
+                    await vscode.commands.executeCommand('workbench.action.chat.open', {
+                        query: prompt,
+                        isPartialQuery: false
+                    });
+                    opened = true;
+                    delivered = true;
+                    try {
+                        await vscode.commands.executeCommand('workbench.action.chat.submit');
+                    } catch {}
+                    console.log('[V.ANSHEE Bridge] Prompt enviado vía fallback workbench.action.chat.open');
+                } catch (err) {
+                    console.warn('[V.ANSHEE Bridge] Fallback workbench.action.chat.open falló:', err);
+                }
+            }
+
+            // Respaldo en portapapeles
+            try {
+                await vscode.env.clipboard.writeText(prompt);
+            } catch {}
+
+            // Indicador no invasivo en la barra de estado
+            vscode.window.setStatusBarMessage(`$(sparkle) [V.ANSHEE] Prompt enviado al Agente: "${prompt.slice(0, 40)}"`, 5000);
 
             sendJson({
                 jsonrpc: '2.0',
                 id: id,
-                result: { success: true, prompt: prompt }
+                result: { success: delivered || opened, prompt: prompt, delivered: delivered, opened: opened, mode: 'agent' }
             });
 
         } else if (method === 'insert_code') {

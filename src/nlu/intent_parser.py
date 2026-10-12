@@ -13,10 +13,11 @@ class StepParameters(BaseModel):
     file_name: str = ""
     content: str = ""
     language: str = "txt"
+    position: str = ""                # Ej: 'left', 'right', 'top', 'bottom', 'top_left', 'top_right', 'bottom_left', 'bottom_right', 'center', 'maximize', 'minimize', 'restore'
 
 class ActionStep(BaseModel):
-    intent: str                        # OPEN_APP | SEARCH_CONTENT | CREATE_PROJECT | CREATE_FILE | WRITE_TEXT | SYSTEM_CONTROL | FORGET_COMMAND
-    target: str                        # Ej: 'vscode', 'youtube', 'chatgpt', 'spotify'
+    intent: str                        # OPEN_APP | SEARCH_CONTENT | WINDOW_CONTROL | CREATE_PROJECT | CREATE_FILE | WRITE_TEXT | SYSTEM_CONTROL | FORGET_COMMAND
+    target: str                        # Ej: 'vscode', 'youtube', 'chatgpt', 'spotify', 'active', 'next_tab', 'close_tab'
     parameters: StepParameters = Field(default_factory=StepParameters)
 
 class ParsedPipeline(BaseModel):
@@ -29,101 +30,94 @@ class IntentParser:
         self.system_prompt = (
             "Eres el motor NLU de V.ANSHEE para automatización en Windows OS.\n"
             "Analiza el texto del usuario y descompón la solicitud en una lista ordenada de PASOS INDEPENDIENTES (pipeline).\n\n"
-            "REGLA CRÍTICA DE COMANDOS COMPUESTOS:\n"
-            "Si la frase contiene conectores como 'y', 'e', 'luego', 'además' o múltiples acciones independientes:\n"
-            "Genera un objeto paso separado para cada acción DISTINTA.\n"
-            "PERO ATENCIÓN: Si el usuario pide abrir un servicio y buscar algo en él (ej: 'abre youtube y busca videos de monster hunter'),\n"
+            "REGLA CRÍTICA DE COMANDOS COMPUESTOS Y MÚLTIPLES:\n"
+            "Si la frase contiene conectores como 'y', 'e', 'luego', 'además', 'después' o múltiples acciones independientes:\n"
+            "Genera un objeto paso separado para CADA ACCIÓN DISTINTA en el orden en que deben ejecutarse.\n"
+            "Ejemplo: 'abre youtube a la izquierda y antigravity a la derecha' genera DOS pasos: uno para youtube (position='left') y otro para antigravity (position='right').\n\n"
+            "REGLA DE BÚSQUEDA VERSUS APERTURA:\n"
+            "Si el usuario pide abrir un servicio y buscar algo en él (ej: 'abre youtube y busca videos de monster hunter'),\n"
             "NO abras la página principal vacía: genera UN SOLO PASO con intent 'SEARCH_CONTENT'.\n\n"
-            "REGLA CRÍTICA DE BÚSQUEDA Y REPRODUCCIÓN EN YOUTUBE / SPOTIFY / WEB:\n"
-            "Si el usuario pide buscar y reproducir un video o música (ej: 'busca videos de warframe y reproduce el primer video', 'reproduce musica de queen en youtube', 'pon el primer video de minecraft'):\n"
-            "Genera UN SOLO PASO con intent 'SEARCH_CONTENT' hacia el servicio correspondiente ('youtube' o 'spotify') y NO agregues un paso separado 'MEDIA_CONTROL'.\n\n"
+            "REGLA DE BÚSQUEDA Y REPRODUCCIÓN EN YOUTUBE / SPOTIFY / WEB:\n"
+            "Si el usuario pide buscar y reproducir un video o música (ej: 'busca videos de warframe y reproduce el primer video', 'reproduce musica de queen en youtube'):\n"
+            "Genera UN SOLO PASO con intent 'SEARCH_CONTENT' hacia el servicio correspondiente y NO agregues un paso 'MEDIA_CONTROL'.\n\n"
             "REGLA CRÍTICA DE PRESERVACIÓN DE MARCAS Y NOMBRES COMPUESTOS:\n"
-            "NUNCA elimines ni acortes palabras que forman parte del nombre de una marca, sitio web o término propio/compuesto (ejemplos: 'solo todo', 'solotodo', 'solo leveling', 'han solo', 'pc factory', 'mercado libre').\n"
-            "'solo todo' NO significa 'solamente todo', es el nombre de la plataforma 'SoloTodo'.\n"
-            "El parámetro 'content' DEBE conservar el nombre completo de la búsqueda ('solo todo').\n\n"
+            "NUNCA elimines ni acortes palabras que forman parte del nombre de una marca o plataforma (ejemplos: 'solo todo', 'solotodo', 'solo leveling', 'pc factory', 'mercado libre').\n\n"
             "REGLAS STRICTAS DE INTENT:\n"
+            "- 'WINDOW_CONTROL' (para mover, ajustar o posicionar ventanas en la pantalla: 'left', 'right', 'top', 'bottom', 'top_left', 'top_right', 'bottom_left', 'bottom_right', 'center', 'maximize', 'minimize', 'restore', o gestionar pestañas: 'next_tab', 'prev_tab', 'new_tab', 'close_tab', 'reopen_tab')\n"
             "- 'HARDWARE_STATUS' (para consultar temperaturas de CPU/GPU, uso de RAM, disco o estado del sistema)\n"
             "- 'SPOTIFY_NOW_PLAYING' (para preguntar qué canción está sonando o qué música suena)\n"
             "- 'SPOTIFY_LIKE' (para guardar la canción actual en favoritos o darle like)\n"
             "- 'SPOTIFY_QUEUE' (para añadir canciones a la cola de Spotify)\n"
             "- 'SET_APP_VOLUME' (para ajustar volumen porcentual de una app como Spotify, Discord o volumen general)\n"
             "- 'MUTE_APP' (para silenciar o mutear una app específica como Discord, juego o navegador)\n"
-            "- 'DISCORD_CONNECT_VOICE' (para conectarse o entrar a un canal de voz de Discord como General o Gaming)\n"
+            "- 'DISCORD_CONNECT_VOICE' (para conectarse o entrar a un canal de voz de Discord)\n"
             "- 'DISCORD_DISCONNECT_VOICE' (para desconectarse o salir del canal de voz de Discord)\n"
             "- 'VALORANT_STORE' (para consultar las skins u ofertas de la tienda de Valorant)\n"
             "- 'VALORANT_LOCK' (para seleccionar o bloquear agentes en Valorant)\n"
-            "- 'LOL_ACCEPT' (para aceptar la partida encontrada en League of Legends)\n"
-            "- 'LOL_DECLINE' (para rechazar la partida encontrada en League of Legends)\n"
-            "- 'LOL_START_QUEUE' (para iniciar la búsqueda de partida / entrar en cola en League of Legends)\n"
-            "- 'LOL_CANCEL_QUEUE' (para cancelar la cola / salir del matchmaking en League of Legends)\n"
-            "- 'LOL_STATUS' (para consultar la fase o estado actual en League of Legends)\n"
-            "- 'LOL_PICK' (para seleccionar o bloquear campeones en League of Legends)\n"
-            "- 'LOL_BAN' (para banear campeones en League of Legends)\n"
+            "- 'LOL_ACCEPT' / 'LOL_DECLINE' / 'LOL_START_QUEUE' / 'LOL_CANCEL_QUEUE' / 'LOL_STATUS' / 'LOL_PICK' / 'LOL_BAN' (para League of Legends)\n"
             "- 'OBS_START_RECORD' / 'OBS_STOP_RECORD' / 'OBS_RECORD' / 'OBS_REPLAY' (para control de OBS Studio)\n"
             "- 'OBSIDIAN_NOTE' / 'OBSIDIAN_TODO' (para anotar en el diario o agregar tareas en Obsidian)\n"
-            "- 'INTERACT_SCREEN' (para abrir el primer enlace, reproducir la primera canción o interactuar con el primer resultado en pantalla)\n"
+            "- 'INTERACT_SCREEN' (para abrir el primer enlace o reproducir el primer video/resultado en pantalla)\n"
             "- 'MEDIA_CONTROL' (para pausar, reanudar/play, siguiente pista, pista anterior, silenciar, subir/bajar volumen)\n"
             "- 'SEARCH_CONTENT' (para buscar videos, música o información en YouTube, Google, Spotify o internet)\n"
-            "- 'OPEN_APP' (para abrir programas locales, páginas web o accesos directos)\n"
+            "- 'OPEN_APP' (para abrir programas locales, páginas web o accesos directos, permitiendo 'parameters.position' para ubicarlos en la pantalla)\n"
             "- 'CREATE_PROJECT' (para crear o iniciar nuevos proyectos de código)\n"
             "- 'CREATE_FILE' (para crear archivos en una ruta o proyecto activo)\n"
-            "- 'WRITE_TEXT' (para redactar notas o dictados en archivos de texto .txt)\n"
+            "- 'WRITE_TEXT' (para redactar notas o dictados en archivos de texto .txt o prompt a agentes)\n"
             "- 'SYSTEM_CONTROL' (para apagar, reiniciar o comandos del SO)\n"
             "- 'FORGET_COMMAND' (para olvidar o borrar un comando aprendido)\n"
             "- 'UNKNOWN' (si la instrucción no es clara o no coincide con nada)\n\n"
-            "REGLAS DE TARGET PARA 'INTERACT_SCREEN':\n"
-            "- 'play_first' (para reproducir el primer video o canción de la pantalla o búsqueda previa)\n"
-            "- 'open_first_link' (para abrir el primer enlace o resultado en el navegador)\n\n"
-            "REGLAS DE TARGET PARA 'MEDIA_CONTROL':\n"
-            "- 'pause' o 'play_pause' (para pausar o alternar reproducción)\n"
-            "- 'play' (para reanudar o reproducir)\n"
-            "- 'next' (para siguiente canción o pista)\n"
-            "- 'previous' (para canción anterior)\n"
-            "- 'mute' (para silenciar o mutear)\n"
-            "- 'volume_up' (para subir volumen)\n"
-            "- 'volume_down' (para bajar volumen)\n\n"
-            "REGLAS DE PARÁMETROS PARA 'SEARCH_CONTENT':\n"
-            "- target: 'youtube', 'google', 'spotify' o el servicio solicitado.\n"
-            "- parameters.content: el término de búsqueda limpio, SIN palabras de relleno como 'videos de', 'canciones de', 'musica de', 'temas de'.\n\n"
-            "REGLAS DE PARÁMETROS PARA 'CREATE_PROJECT':\n"
-            "- project_type: 'python', 'node', 'web' o 'none'.\n"
-            "- project_name: nombre del proyecto.\n\n"
-            "REGLA DE PALABRA DE ACTIVACIÓN:\n"
-            "Ignora palabras de saludo o activación como 'Banchi', 'Vanshee', 'V.ANSHEE', 'Oye Vanshee' al inicio.\n\n"
+            "REGLAS DE PARÁMETRO 'position' EN 'OPEN_APP' Y 'WINDOW_CONTROL':\n"
+            "- 'left': mitad izquierda de la pantalla\n"
+            "- 'right': mitad derecha de la pantalla\n"
+            "- 'top': mitad superior de la pantalla\n"
+            "- 'bottom': mitad inferior de la pantalla\n"
+            "- 'top_left', 'top_right', 'bottom_left', 'bottom_right': cuadrantes de pantalla\n"
+            "- 'center': centrar ventana en pantalla\n"
+            "- 'maximize': maximizar / pantalla completa\n"
+            "- 'minimize': minimizar / ocultar\n"
+            "- 'restore': restaurar tamaño\n\n"
             "Formato JSON Estricto Requerido:\n"
             "{\n"
             '  "steps": [\n'
             '    {\n'
-            '      "intent": "SEARCH_CONTENT",\n'
+            '      "intent": "OPEN_APP",\n'
             '      "target": "youtube",\n'
             '      "parameters": {\n'
-            '        "content": "warframe"\n'
+            '        "position": "left"\n'
+            '      }\n'
+            '    },\n'
+            '    {\n'
+            '      "intent": "OPEN_APP",\n'
+            '      "target": "antigravity",\n'
+            '      "parameters": {\n'
+            '        "position": "right"\n'
             '      }\n'
             '    }\n'
             '  ],\n'
             '  "confidence": 1.0\n'
             "}\n\n"
             "EJEMPLOS OBLIGATORIOS:\n"
-            "1. 'busca videos de warframe y reproduce el primer video':\n"
+            "1. 'abre a la izquierda de mi pantalla youtube y a la derecha antigravity':\n"
+            '   {"steps": [{"intent": "OPEN_APP", "target": "youtube", "parameters": {"position": "left"}}, {"intent": "OPEN_APP", "target": "antigravity", "parameters": {"position": "right"}}], "confidence": 1.0}\n'
+            "2. 'abre youtube a la izquierda de mi pantalla':\n"
+            '   {"steps": [{"intent": "OPEN_APP", "target": "youtube", "parameters": {"position": "left"}}], "confidence": 1.0}\n'
+            "3. 'mueve la ventana actual a la derecha':\n"
+            '   {"steps": [{"intent": "WINDOW_CONTROL", "target": "active", "parameters": {"position": "right"}}], "confidence": 1.0}\n'
+            "4. 'maximiza spotify':\n"
+            '   {"steps": [{"intent": "WINDOW_CONTROL", "target": "spotify", "parameters": {"position": "maximize"}}], "confidence": 1.0}\n'
+            "5. 'siguiente pestana':\n"
+            '   {"steps": [{"intent": "WINDOW_CONTROL", "target": "next_tab", "parameters": {}}], "confidence": 1.0}\n'
+            "6. 'cierra la pestana':\n"
+            '   {"steps": [{"intent": "WINDOW_CONTROL", "target": "close_tab", "parameters": {}}], "confidence": 1.0}\n'
+            "7. 'abre spotify y pon el volumen al 50':\n"
+            '   {"steps": [{"intent": "OPEN_APP", "target": "spotify", "parameters": {}}, {"intent": "SET_APP_VOLUME", "target": "master", "parameters": {"content": "50"}}], "confidence": 1.0}\n'
+            "8. 'busca videos de warframe y reproduce el primer video':\n"
             '   {"steps": [{"intent": "SEARCH_CONTENT", "target": "youtube", "parameters": {"content": "warframe"}}], "confidence": 1.0}\n'
-            "2. 'busca canciones de lana del rey en spotify':\n"
-            '   {"steps": [{"intent": "SEARCH_CONTENT", "target": "spotify", "parameters": {"content": "lana del rey"}}], "confidence": 1.0}\n'
-            "3. 'busca solo todo en el navegador y abre el primer link':\n"
-            '   {"steps": [{"intent": "SEARCH_CONTENT", "target": "google", "parameters": {"content": "solo todo"}}], "confidence": 1.0}\n'
-            "4. 'pausa la musica de spotify':\n"
+            "9. 'pausa la musica de spotify':\n"
             '   {"steps": [{"intent": "MEDIA_CONTROL", "target": "pause", "parameters": {}}], "confidence": 1.0}\n'
-            "5. 'siguiente cancion':\n"
-            '   {"steps": [{"intent": "MEDIA_CONTROL", "target": "next", "parameters": {}}], "confidence": 1.0}\n'
-            "6. 'sube el volumen':\n"
-            '   {"steps": [{"intent": "MEDIA_CONTROL", "target": "volume_up", "parameters": {}}], "confidence": 1.0}\n'
-            "7. 'ejecuta vs code e inicia un nuevo proyecto python llamado mi_app':\n"
-            '   {"steps": [{"intent": "OPEN_APP", "target": "vscode", "parameters": {}}, {"intent": "CREATE_PROJECT", "target": "vscode", "parameters": {"project_type": "python", "project_name": "mi_app"}}], "confidence": 1.0}\n'
-            "8. 'abre antigravity y pon el siguiente prompt escribe hola mundo':\n"
+            "10. 'abre antigravity y pon el siguiente prompt escribe hola mundo':\n"
             '   {"steps": [{"intent": "OPEN_APP", "target": "antigravity", "parameters": {}}, {"intent": "WRITE_TEXT", "target": "antigravity", "parameters": {"content": "hola mundo"}}], "confidence": 1.0}\n'
-            "9. 'escribe el siguiente prompt crea una calculadora en python':\n"
-            '   {"steps": [{"intent": "WRITE_TEXT", "target": "prompt", "parameters": {"content": "crea una calculadora en python"}}], "confidence": 1.0}\n'
-            "10. 'olvida el ultimo comando':\n"
-            '   {"steps": [{"intent": "FORGET_COMMAND", "target": "last", "parameters": {}}], "confidence": 1.0}\n'
             "Responde ÚNICAMENTE con el objeto JSON."
         )
 
@@ -132,10 +126,25 @@ class IntentParser:
         clean = text.strip()
         clean = re.sub(r"^(?:banshee|vanshee|banchi|oye banshee|oye banshee)[,\s]*", "", clean, flags=re.IGNORECASE).strip()
 
-        # 1. abre <app> y pon/escribe el prompt <texto> (ej: 'abre Antigravity y pon el siguiente prompt. Escribe hola mundo')
-        m1 = re.search(r"^(?:abre|abrir|inicia|ejecuta)\s+(antigravity|cursor|claude|codex|opencode|windsurf|vscode|vs code)\s+y\s+(?:pon|escribe|envia|enviar|redacta)\s+(?:el\s+)?(?:siguiente\s+)?(?:prompt|mensaje|texto)?[:,\s\.]+(?:escribe\s+)?(.+)$", clean, flags=re.IGNORECASE)
+        verbs = r"(?:dile|dilo|dila|di|pide|pidele|pidale|preguntale|pregunta|consultale|consulta|mandale|manda|enviale|envia)"
+        apps = r"(?:antigravity|anti[\s\-]?gravity|cursor|claude|codex|opencode|windsurf|vscode|vs code|agente|el\s+agente|agente\s+de\s+c[oó]digo|el\s+agente\s+de\s+c[oó]digo|editor|el\s+editor|editor\s+de\s+c[oó]digo|el\s+editor\s+de\s+c[oó]digo|ide)"
+
+        def _resolve_target(raw: str) -> str:
+            r = raw.lower().strip()
+            if any(k in r for k in ["anti", "agente", "editor", "ide", "chat"]):
+                return "antigravity"
+            if "vs" in r or "code" in r:
+                return "vscode"
+            return r
+
+        # 1. abre <app> y dile/ponle/escribe [prompt] <texto> (ej: 'abre Antigravity y dile hola mundo')
+        m1 = re.search(
+            rf"^(?:abre|abrir|inicia|ejecuta)\s+({apps})\s+y\s+(?:pon|ponle|escribe|escribele|dile|dilo|envia|enviar|redacta|mandale|manda)(?:\s+(?:a|al)\s+|\s+)?(?:(?:el\s+)?(?:siguiente\s+)?(?:prompt|mensaje|texto)[:,\s\.]*|[:,\s\.]*)(?:escribe\s+)?(?:que\s+)?(.+)$",
+            clean,
+            flags=re.IGNORECASE
+        )
         if m1:
-            app_target = m1.group(1).lower().strip()
+            app_target = _resolve_target(m1.group(1))
             prompt_content = m1.group(2).strip().rstrip(".")
             return ParsedPipeline(
                 raw_text=text,
@@ -146,22 +155,28 @@ class IntentParser:
                 confidence=1.0
             )
 
-        # 2. pon/escribe el siguiente prompt <texto>
-        m2 = re.search(r"^(?:pon|escribe|envia|enviar|dicta|redacta)\s+(?:el\s+)?(?:siguiente\s+)?(?:prompt|mensaje)[:,\s\.]+(?:escribe\s+)?(.+)$", clean, flags=re.IGNORECASE)
+        # 2. pon/escribe/envía [el prompt] [al agente / al editor]: <texto>
+        m2 = re.search(
+            rf"^(?:pon|escribe|envia|enviar|dicta|redacta|manda)\s+(?:el\s+)?(?:siguiente\s+)?(?:prompt|mensaje)?(?:\s+(?:a|al|en)\s+(?:el\s+)?({apps}))?[:,\s\.]+(?:escribe\s+)?(?:que\s+)?(.+)$",
+            clean,
+            flags=re.IGNORECASE
+        )
         if m2:
-            prompt_content = m2.group(1).strip().rstrip(".")
+            raw_tgt = m2.group(1) or "antigravity"
+            app_target = _resolve_target(raw_tgt)
+            prompt_content = m2.group(2).strip().rstrip(".")
             return ParsedPipeline(
                 raw_text=text,
                 steps=[
-                    ActionStep(intent="WRITE_TEXT", target="prompt", parameters=StepParameters(content=prompt_content))
+                    ActionStep(intent="WRITE_TEXT", target=app_target, parameters=StepParameters(content=prompt_content))
                 ],
                 confidence=1.0
             )
 
         # 3. escribe en <app/chat> <texto>
-        m3 = re.search(r"^(?:escribe|pon|envia|redacta)\s+en\s+(antigravity|cursor|claude|codex|opencode|windsurf|vscode|vs code|el\s+chat|el\s+agente)[:,\s\.]+(?:escribe\s+)?(.+)$", clean, flags=re.IGNORECASE)
+        m3 = re.search(rf"^(?:escribe|pon|envia|redacta|manda)\s+en\s+({apps})[:,\s\.]+(?:escribe\s+)?(.+)$", clean, flags=re.IGNORECASE)
         if m3:
-            target_app = m3.group(1).lower().strip().replace("el chat", "chat").replace("el agente", "agent")
+            target_app = _resolve_target(m3.group(1))
             prompt_content = m3.group(2).strip().rstrip(".")
             return ParsedPipeline(
                 raw_text=text,
@@ -171,6 +186,52 @@ class IntentParser:
                 confidence=1.0
             )
 
+        # 4. dile / dilo / pide / pidele / preguntale a <app/agente> [que] <mensaje> (ej: 'dile a Antigravity hola. Esto es una prueba.')
+        m4 = re.search(rf"^{verbs}\s+(?:(?:a|al|en)\s+)?({apps})[:,\s\.]+(?:que\s+)?(.+)$", clean, flags=re.IGNORECASE)
+        if m4:
+            target_app = _resolve_target(m4.group(1))
+            prompt_content = m4.group(2).strip().rstrip(".")
+            return ParsedPipeline(
+                raw_text=text,
+                steps=[
+                    ActionStep(intent="OPEN_APP", target=target_app, parameters=StepParameters()),
+                    ActionStep(intent="WRITE_TEXT", target=target_app, parameters=StepParameters(content=prompt_content))
+                ],
+                confidence=1.0
+            )
+
+        # 5. [en] <app> dile/pon/escribe/manda <texto> (ej: 'antigravity escribe hola mundo')
+        m5 = re.search(rf"^(?:en\s+)?({apps})\s+(?:dile|dilo|pon|escribe|envia|manda)[:,\s\.]+(?:que\s+)?(.+)$", clean, flags=re.IGNORECASE)
+        if m5:
+            target_app = _resolve_target(m5.group(1))
+            prompt_content = m5.group(2).strip().rstrip(".")
+            return ParsedPipeline(
+                raw_text=text,
+                steps=[
+                    ActionStep(intent="OPEN_APP", target=target_app, parameters=StepParameters()),
+                    ActionStep(intent="WRITE_TEXT", target=target_app, parameters=StepParameters(content=prompt_content))
+                ],
+                confidence=1.0
+            )
+
+        return None
+
+    def _fast_editor_status_check(self, text: str) -> ActionStep | None:
+        """Detección ultra-rápida de consultas de conexión y estado de editores de código."""
+        clean = text.strip().lower()
+        clean = re.sub(r"^(?:banshee|vanshee|banchi|oye banshee|oye banshee)[,\s]*", "", clean).strip().rstrip("?.!")
+
+        editor_terms = r"(?:editor(?:es)?(?:\s+de\s+c[oó]digo)?|ide|vscode|antigravity)"
+        prep = r"(?:\s+(?:a|al|con|de|del)(?:\s+(?:el|la|los|las))?)?"
+        patterns = [
+            rf"^(?:con[eé]ctate|conectar|conecta){prep}\s+{editor_terms}$",
+            rf"^(?:revisa|ver|comprueba|chequea|consultar?)\s+(?:la\s+)?(?:conexi[oó]n|estado){prep}\s+{editor_terms}$",
+            rf"^(?:estado\s+del?\s+{editor_terms}|{editor_terms}\s+conectados?)$",
+            rf"^(?:hay\s+alg[uú]n\s+{editor_terms}\s+conectado)$"
+        ]
+        for p in patterns:
+            if re.search(p, clean):
+                return ActionStep(intent="EDITOR_STATUS", target="editor", parameters=StepParameters())
         return None
 
     def _fast_media_check(self, text: str) -> ActionStep | None:
@@ -247,10 +308,13 @@ class IntentParser:
         # 1. abre <servicio> y busca <query>
         m1 = re.search(r"^(?:abre|abrir|inicia|ejecuta)\s+(youtube|google|spotify|brave|chrome|el\s+navegador|el\s+buscador)\s+y\s+(?:busca|buscar|encuentra|pon)\s+(.+)$", clean, flags=re.IGNORECASE)
         if m1:
-            srv = m1.group(1).strip().lower().replace("el navegador", "google").replace("el buscador", "google")
-            qry = clean_search_term(m1.group(2).strip())
-            if qry and qry.lower() not in ignored_search_terms:
-                return ActionStep(intent="SEARCH_CONTENT", target=srv, parameters=StepParameters(content=qry))
+            raw_action = m1.group(2).strip()
+            # Si lo que sigue es ajuste de volumen, pausa, prompt o ventana, no es búsqueda en el servicio
+            if not re.search(r"^(?:el\s+)?volumen|pausa|el\s+prompt|la\s+ventana|a\s+la\s+izquierda|a\s+la\s+derecha", raw_action, flags=re.IGNORECASE):
+                srv = m1.group(1).strip().lower().replace("el navegador", "google").replace("el buscador", "google")
+                qry = clean_search_term(raw_action) or raw_action
+                if qry:
+                    return ActionStep(intent="SEARCH_CONTENT", target=srv, parameters=StepParameters(content=qry))
 
         # 2. busca <query> en <servicio> [y abre el primer link/resultado]
         m2 = re.search(r"^(?:busca|buscar|encuentra|pon|reproduce)\s+(.+?)\s+en\s+(youtube|google|spotify|brave|chrome|el\s+navegador|el\s+buscador|la\s+web|internet)(?:\s+(?:y\s+)?(?:abre|entra|ingresa|ve)(?:\s+(?:a|al|en))?\s+(?:el\s+)?(?:primer\s+|1er\s+)?(?:link|enlace|resultado|pagina|página|sitio))?\.?$", clean, flags=re.IGNORECASE)
@@ -316,7 +380,7 @@ class IntentParser:
 
         # 3.5. Spotify Playback directo
         m_play_spotify = re.search(r"^(?:pon|reproduce|toca|escuchar|reproducir)\s+(?:una\s+cancion\s+de\s+|la\s+cancion\s+de\s+|musica\s+de\s+|canciones\s+de\s+|un\s+tema\s+de\s+|a\s+)?(.+?)(?:\s+en\s+spotify)?$", norm)
-        if m_play_spotify and not any(w in norm for w in ["youtube", "video", "obs", "obsidian", "valorant", "lol", "league", "volumen"]):
+        if m_play_spotify and not any(w in norm for w in ["youtube", "video", "obs", "obsidian", "valorant", "lol", "league", "volumen", "pantalla", "ventana", "completa", "pestana", "pestaña"]):
             query_music = m_play_spotify.group(1).strip()
             query_music = re.sub(r"^(?:de|el|la|los|las|un|una)\s+", "", query_music).strip()
             if query_music and query_music not in ["musica", "cancion", "play"]:
@@ -445,11 +509,318 @@ class IntentParser:
             todo_txt = m_obs_todo.group(1).strip()
             return ActionStep(intent="OBSIDIAN_TODO", target="obsidian", parameters=StepParameters(content=todo_txt))
 
+        # 11. Git: Estado, Commits automáticos, Push, Pull, Diff, Ramas
+        # 11.1. Git Commit con mensaje explícito
+        m_git_msg = re.search(
+            r"^(?:haz|hacer|crea|crear|genera|generar)\s+(?:un\s+)?commit\s+(?:con\s+el\s+mensaje|diciendo|con\s+mensaje|con\s+texto|que\s+diga|titulado)[:,\s]+['\"]?(.+?)['\"]?$",
+            clean,
+            flags=re.IGNORECASE
+        )
+        if not m_git_msg:
+            m_git_msg = re.search(
+                r"^(?:haz|hacer|crea|crear|genera|generar)\s+(?:un\s+)?commit\s+['\"](.+?)['\"]$",
+                clean,
+                flags=re.IGNORECASE
+            )
+        if m_git_msg:
+            raw_msg = m_git_msg.group(1).strip().strip("'\"")
+            if raw_msg.lower() not in ["automatico", "automático", "los cambios", "de los cambios"]:
+                return ActionStep(intent="GIT_COMMIT", target="git", parameters=StepParameters(content=raw_msg))
+
+        # 11.2. Git Commit automático
+        if any(norm == w for w in [
+            "haz un commit", "haz commit", "crea un commit", "crear commit", 
+            "commit automatico", "commit automático", "auto commit", 
+            "commitea los cambios", "commitea", "commitear", 
+            "guarda los cambios en git", "guardar cambios en git", "hacer commit",
+            "haz un commit de los cambios", "haz commit de los cambios"
+        ]):
+            return ActionStep(intent="GIT_COMMIT", target="git", parameters=StepParameters())
+
+        # 11.3. Git Status
+        if re.search(r"^(?:por\s+favor\s+)?(?:estado\s+de\s+git|como\s+esta\s+git|revisa\s+git|revisar\s+git|revisa\s+el\s+estado\s+de\s+git|estado\s+del\s+repositorio|que\s+cambios\s+hay\s+en\s+git|git\s+status|status\s+de\s+git|status\s+del\s+repo)$", norm):
+            return ActionStep(intent="GIT_STATUS", target="git", parameters=StepParameters())
+
+        # 11.4. Git Push
+        if re.search(r"^(?:por\s+favor\s+)?(?:sube|subir)\s+los\s+cambios(?:\s+a\s+git|\s+al\s+repositorio)?$|^(?:haz\s+)?git\s+push$|^(?:pushea|pushear)(?:\s+los\s+cambios|\s+a\s+git)?$|^(?:sube|subir)\s+al\s+repositorio$", norm):
+            return ActionStep(intent="GIT_PUSH", target="git", parameters=StepParameters())
+
+        # 11.5. Git Pull
+        if re.search(r"^(?:por\s+favor\s+)?(?:trae|traer)\s+los\s+cambios(?:\s+de\s+git|\s+del\s+repositorio)?$|^(?:haz\s+)?git\s+pull$|^(?:pullea|pullear)(?:\s+los\s+cambios)?$|^(?:actualiza|actualizar)\s+el\s+repositorio$", norm):
+            return ActionStep(intent="GIT_PULL", target="git", parameters=StepParameters())
+
+        # 11.6. Git Diff
+        if re.search(r"^(?:que\s+cambios\s+hice|muestra\s+el\s+diff|mostrar\s+diff|git\s+diff|diff\s+de\s+git|muestra\s+los\s+cambios(?:\s+de\s+git)?|ver\s+el\s+diff|revisa\s+los\s+cambios)$", norm):
+            return ActionStep(intent="GIT_DIFF", target="git", parameters=StepParameters())
+
+        # 11.7. Git Branch (crear, cambiar, consultar)
+        m_branch_create = re.search(
+            r"^(?:crea|crear|haz)\s+(?:una\s+)?rama(?:\s+(?:llamada|con\s+nombre))?\s+([a-zA-Z0-9_\-\./]+)$",
+            clean,
+            flags=re.IGNORECASE
+        )
+        if m_branch_create:
+            b_name = m_branch_create.group(1).strip()
+            return ActionStep(intent="GIT_BRANCH", target="create", parameters=StepParameters(content=b_name))
+
+        m_branch_switch = re.search(
+            r"^(?:cambia|cambiar|cambiate|cámbiate|pasa|pasar)\s+(?:a\s+la\s+|de\s+)?rama\s+([a-zA-Z0-9_\-\./]+)$",
+            clean,
+            flags=re.IGNORECASE
+        )
+        if m_branch_switch:
+            b_name = m_branch_switch.group(1).strip()
+            return ActionStep(intent="GIT_BRANCH", target="switch", parameters=StepParameters(content=b_name))
+
+        if re.search(r"^(?:en\s+que\s+rama\s+(?:de\s+git\s+)?estoy|que\s+rama\s+tengo\s+activa|rama\s+actual\s+de\s+git|rama\s+de\s+git|git\s+branch)$", norm):
+            return ActionStep(intent="GIT_BRANCH", target="current", parameters=StepParameters())
+
         return None
+
+    def _fast_window_check(self, text: str) -> list[ActionStep] | ActionStep | None:
+        """Detección ultra-rápida y determinista de comandos de ventanas y pestañas."""
+        clean = text.strip()
+        clean = re.sub(r"^(?:banshee|vanshee|banchi|oye banshee|oye banshee)[,\s]*", "", clean, flags=re.IGNORECASE).strip()
+        norm = clean.lower().strip("¿?¡!.,;: \t").replace("á", "a").replace("é", "e").replace("í", "i").replace("ó", "o").replace("ú", "u")
+
+        def _clean_pos(pos_str: str) -> str:
+            p = pos_str.lower().replace("á", "a").replace("é", "e").replace("í", "i").replace("ó", "o").replace("ú", "u").strip()
+            if any(k in p for k in ["arriba a la izquierda", "superior izquierda", "arriba izquierda"]):
+                return "top_left"
+            if any(k in p for k in ["arriba a la derecha", "superior derecha", "arriba derecha"]):
+                return "top_right"
+            if any(k in p for k in ["abajo a la izquierda", "inferior izquierda", "abajo izquierda"]):
+                return "bottom_left"
+            if any(k in p for k in ["abajo a la derecha", "inferior derecha", "abajo derecha"]):
+                return "bottom_right"
+            if "izq" in p or "izquierda" in p:
+                return "left"
+            if "der" in p or "derecha" in p:
+                return "right"
+            if "arriba" in p or "superior" in p:
+                return "top"
+            if "abajo" in p or "inferior" in p:
+                return "bottom"
+            if any(k in p for k in ["maxim", "completa", "fullscreen", "agrand", "toda la pantalla", "pantalla entera"]):
+                return "maximize"
+            if any(k in p for k in ["minim", "ocult"]):
+                return "minimize"
+            if any(k in p for k in ["centr", "medio"]):
+                return "center"
+            return "left"
+
+        pos_pattern = (
+            r"izquierda|derecha|mitad\s+izquierda|mitad\s+derecha|arriba|abajo|centro|al\s+centro|"
+            r"arriba\s+a\s+la\s+izquierda|arriba\s+a\s+la\s+derecha|abajo\s+a\s+la\s+izquierda|abajo\s+a\s+la\s+derecha|"
+            r"esquina\s+superior\s+izquierda|esquina\s+superior\s+derecha|esquina\s+inferior\s+izquierda|esquina\s+inferior\s+derecha|"
+            r"superior\s+izquierda|superior\s+derecha|inferior\s+izquierda|inferior\s+derecha|"
+            r"pantalla\s+completa|en\s+pantalla\s+completa|a\s+pantalla\s+completa|fullscreen|completa|toda\s+la\s+pantalla|"
+            r"maximizado|maximizada|maximizar|minimizado|minimizada|minimizar"
+        )
+
+        # 0. Ordenar / Organizar ventanas en la pantalla: 'ordena las ventanas', 'organiza las ventanas en la pantalla'
+        m_tile = re.search(
+            r"^(?:ordena|ordenar|organiza|organizar|acomoda|acomodar|distribuye|distribuir|reorganiza|reorganizar)\s+(?:todas\s+)?(?:las\s+)?ventanas(?:\s+(?:en\s+la\s+pantalla|en\s+pantalla|abiertas))?$",
+            clean,
+            flags=re.IGNORECASE
+        )
+        if m_tile:
+            return ActionStep(intent="WINDOW_CONTROL", target="tile", parameters=StepParameters(position="tile"))
+
+        # 1. Split / Dual open: 'abre a la izquierda de mi pantalla YouTube y a la derecha AntiGravity'
+        m_dual1 = re.search(
+            rf"^(?:abre|abrir|inicia|ejecuta|pon|coloca)\s+(?:a\s+la\s+|en\s+la\s+|al\s+|a\s+|en\s+)?({pos_pattern})(?:\s+de\s+(?:mi\s+|la\s+)?pantalla)?\s+([a-zA-Z0-9_\-\.\s]+?)\s+y\s+(?:a\s+la\s+|en\s+la\s+|al\s+|a\s+|en\s+)?({pos_pattern})(?:\s+de\s+(?:mi\s+|la\s+)?pantalla)?\s+(?:abre\s+|inicia\s+|pon\s+)?([a-zA-Z0-9_\-\.\s]+)$",
+            clean,
+            flags=re.IGNORECASE
+        )
+        if m_dual1:
+            pos1 = _clean_pos(m_dual1.group(1))
+            app1 = m_dual1.group(2).strip().lower()
+            pos2 = _clean_pos(m_dual1.group(3))
+            app2 = m_dual1.group(4).strip().lower()
+            return [
+                ActionStep(intent="OPEN_APP", target=app1, parameters=StepParameters(position=pos1)),
+                ActionStep(intent="OPEN_APP", target=app2, parameters=StepParameters(position=pos2))
+            ]
+
+        # 2. Split / Dual open (Apps first): 'abre YouTube a la izquierda y AntiGravity a la derecha'
+        m_dual2 = re.search(
+            rf"^(?:abre|abrir|inicia|ejecuta|pon|coloca)\s+([a-zA-Z0-9_\-\.\s]+?)\s+(?:a\s+la\s+|en\s+la\s+|al\s+|a\s+|en\s+)?({pos_pattern})(?:\s+de\s+(?:mi\s+|la\s+)?pantalla)?\s+y\s+(?:abre\s+|inicia\s+|pon\s+)?([a-zA-Z0-9_\-\.\s]+?)\s+(?:a\s+la\s+|en\s+la\s+|al\s+|a\s+|en\s+)?({pos_pattern})(?:\s+de\s+(?:mi\s+|la\s+)?pantalla)?$",
+            clean,
+            flags=re.IGNORECASE
+        )
+        if m_dual2:
+            app1 = m_dual2.group(1).strip().lower()
+            pos1 = _clean_pos(m_dual2.group(2))
+            app2 = m_dual2.group(3).strip().lower()
+            pos2 = _clean_pos(m_dual2.group(4))
+            return [
+                ActionStep(intent="OPEN_APP", target=app1, parameters=StepParameters(position=pos1)),
+                ActionStep(intent="OPEN_APP", target=app2, parameters=StepParameters(position=pos2))
+            ]
+
+        # 3. Divide pantalla: 'divide la pantalla entre YouTube y AntiGravity'
+        m_split = re.search(
+            r"^(?:divide|dividir|parte|partir)\s+(?:la\s+)?pantalla(?:\s+entre|\s+con|:)?\s+([a-zA-Z0-9_\-\.\s]+?)(?:\s+a\s+la\s+izquierda)?\s+y\s+([a-zA-Z0-9_\-\.\s]+?)(?:\s+a\s+la\s+derecha)?$",
+            clean,
+            flags=re.IGNORECASE
+        )
+        if m_split:
+            app1 = m_split.group(1).strip().lower()
+            app2 = m_split.group(2).strip().lower()
+            return [
+                ActionStep(intent="OPEN_APP", target=app1, parameters=StepParameters(position="left")),
+                ActionStep(intent="OPEN_APP", target=app2, parameters=StepParameters(position="right"))
+            ]
+
+        # 4. Single Open App with position: 'abre YouTube a la izquierda de mi pantalla', 'abre Spotify en pantalla completa'
+        m_single1 = re.search(
+            rf"^(?:abre|abrir|inicia|iniciar|ejecuta|ejecutar|lanza)\s+([a-zA-Z0-9_\-\.\s]+?)\s+(?:a\s+la\s+|en\s+la\s+|al\s+|a\s+|en\s+)?({pos_pattern})(?:\s+de\s+(?:mi\s+|la\s+)?pantalla)?$",
+            clean,
+            flags=re.IGNORECASE
+        )
+        if m_single1:
+            app = m_single1.group(1).strip().lower()
+            pos = _clean_pos(m_single1.group(2))
+            return ActionStep(intent="OPEN_APP", target=app, parameters=StepParameters(position=pos))
+
+        # 5. Position first, app second: 'abre a la izquierda de mi pantalla YouTube', 'abre en pantalla completa Spotify'
+        m_single2 = re.search(
+            rf"^(?:abre|abrir|inicia|iniciar|ejecuta|ejecutar|lanza)\s+(?:a\s+la\s+|en\s+la\s+|al\s+|a\s+|en\s+)?({pos_pattern})(?:\s+de\s+(?:mi\s+|la\s+)?pantalla)?\s+([a-zA-Z0-9_\-\.\s]+)$",
+            clean,
+            flags=re.IGNORECASE
+        )
+        if m_single2:
+            pos = _clean_pos(m_single2.group(1))
+            app = m_single2.group(2).strip().lower()
+            return ActionStep(intent="OPEN_APP", target=app, parameters=StepParameters(position=pos))
+
+        # 6. Mover / Acomodar ventana existente o activa: 'mueve YouTube a la derecha', 'pon Spotify en pantalla completa', 'pon la ventana en pantalla completa'
+        m_move = re.search(
+            rf"^(?:mueve|mover|pon|poner|coloca|colocar|ajusta|ajustar|acomoda|acomodar)\s+(?:la\s+ventana\s+de\s+|la\s+app\s+de\s+)?([a-zA-Z0-9_\-\.\s]+?)\s+(?:a\s+la\s+|en\s+la\s+|al\s+|a\s+|en\s+)?({pos_pattern})(?:\s+de\s+(?:mi\s+|la\s+)?pantalla)?$",
+            clean,
+            flags=re.IGNORECASE
+        )
+        if m_move:
+            target_raw = m_move.group(1).strip().lower()
+            pos = _clean_pos(m_move.group(2))
+            target = "active" if target_raw in ["esta", "esta ventana", "la ventana", "la ventana actual", "ventana actual", "actual", "activa", "pantalla", "app", "a", "en", "al", "el", "la", "de"] else target_raw
+            return ActionStep(intent="WINDOW_CONTROL", target=target, parameters=StepParameters(position=pos))
+
+        # 7. Maximizar / Pantalla completa / Minimizar / Centrar
+        m_max = re.search(
+            r"^(?:maximiza|maximizar|agrandar|fullscreen|(?:pon|poner|coloca|colocar|haz|hacer)(?:la|lo)?\s+(?:a\s+|en\s+)?pantalla\s+completa|(?:en\s+|a\s+)?pantalla\s+completa)(?:\s+(?:de\s+|para\s+|la\s+ventana\s+de\s+|la\s+ventana\s+actual|esta\s+ventana|la\s+ventana|la\s+app\s+de\s+)?([a-zA-Z0-9_\-\.\s]+))?$",
+            clean,
+            flags=re.IGNORECASE
+        )
+        if m_max:
+            t = (m_max.group(1) or "").strip().lower()
+            target = "active" if not t or t in ["esta", "esta ventana", "la ventana", "la ventana actual", "ventana actual", "actual", "activa", "pantalla", "app"] else t
+            return ActionStep(intent="WINDOW_CONTROL", target=target, parameters=StepParameters(position="maximize"))
+
+        m_min = re.search(r"^(?:minimiza|minimizar|oculta|ocultar)(?:\s+(?:la\s+ventana\s+de\s+|la\s+ventana\s+actual|esta\s+ventana|la\s+ventana|la\s+app\s+de\s+)?([a-zA-Z0-9_\-\.\s]+))?$", clean, flags=re.IGNORECASE)
+        if m_min:
+            t = (m_min.group(1) or "").strip().lower()
+            target = "active" if not t or t in ["esta", "esta ventana", "la ventana", "la ventana actual", "ventana actual", "actual", "activa", "pantalla", "app"] else t
+            return ActionStep(intent="WINDOW_CONTROL", target=target, parameters=StepParameters(position="minimize"))
+
+        m_cen = re.search(r"^(?:centra|centrar|al\s+centro)(?:\s+(?:la\s+ventana\s+de\s+|la\s+ventana\s+actual|esta\s+ventana|la\s+ventana|la\s+app\s+de\s+)?([a-zA-Z0-9_\-\.\s]+))?$", clean, flags=re.IGNORECASE)
+        if m_cen:
+            t = (m_cen.group(1) or "").strip().lower()
+            target = "active" if not t or t in ["esta", "esta ventana", "la ventana", "la ventana actual", "ventana actual", "actual", "activa", "pantalla", "app"] else t
+            return ActionStep(intent="WINDOW_CONTROL", target=target, parameters=StepParameters(position="center"))
+
+        # 8. Pestañas de navegador / editores
+        if any(w in norm for w in ["siguiente pestaña", "pestana siguiente", "cambia de pestaña", "cambia de pestana", "pasa de pestaña", "pasa de pestana"]):
+            return ActionStep(intent="WINDOW_CONTROL", target="next_tab", parameters=StepParameters())
+        if any(w in norm for w in ["anterior pestaña", "pestana anterior", "pestaña previa", "pestana previa"]):
+            return ActionStep(intent="WINDOW_CONTROL", target="prev_tab", parameters=StepParameters())
+        if any(w in norm for w in ["nueva pestaña", "pestana nueva", "abre una pestaña", "abre una pestana", "otra pestaña", "otra pestana"]):
+            return ActionStep(intent="WINDOW_CONTROL", target="new_tab", parameters=StepParameters())
+        if any(w in norm for w in ["cierra la pestaña", "cerrar pestaña", "cierra pestaña", "cierra esta pestaña", "cierra pestana", "cerrar pestana", "quita la pestaña"]):
+            return ActionStep(intent="WINDOW_CONTROL", target="close_tab", parameters=StepParameters())
+        if any(w in norm for w in ["reabre la pestaña", "reabrir pestaña", "recupera la pestaña", "restaura la pestaña", "reabrir pestana"]):
+            return ActionStep(intent="WINDOW_CONTROL", target="reopen_tab", parameters=StepParameters())
+
+        return None
+
+    def _fast_open_app_check(self, text: str) -> ActionStep | None:
+        """Detección ultra-rápida y determinista de comandos simples de apertura de apps."""
+        clean = text.strip()
+        clean = re.sub(r"^(?:banshee|vanshee|banchi|oye banshee|oye banshee)[,\s]*", "", clean, flags=re.IGNORECASE).strip()
+        m = re.search(r"^(?:abre|abrir|inicia|iniciar|ejecuta|ejecutar|lanza|lanzar)\s+(?:la\s+app\s+de\s+|el\s+programa\s+de\s+|la\s+aplicacion\s+de\s+|el\s+)?([a-zA-Z0-9_\-\.\s]+)$", clean, flags=re.IGNORECASE)
+        if m:
+            target = m.group(1).strip().lower()
+            if target and target not in ["un archivo", "un proyecto", "una carpeta", "un video", "una cancion", "musica", "el prompt", "la consola", "el navegador"]:
+                if not any(w in target for w in ["busca", "videos de", "canciones de", " y ", " e "]):
+                    return ActionStep(intent="OPEN_APP", target=target, parameters=StepParameters())
+        return None
+
+    def _parse_single_clause(self, clause: str) -> list[ActionStep] | None:
+        """Intenta parsear una cláusula o sub-comando individual mediante motores deterministas rápidos."""
+        c = clause.strip()
+        if not c:
+            return None
+        p_pipe = self._fast_prompt_check(c)
+        if p_pipe and p_pipe.steps:
+            return p_pipe.steps
+        integ = self._fast_integration_check(c)
+        if integ:
+            return [integ]
+        win = self._fast_window_check(c)
+        if win:
+            return win if isinstance(win, list) else [win]
+        rel = self._fast_relative_action_check(c)
+        if rel:
+            return [rel]
+        med = self._fast_media_check(c)
+        if med:
+            return [med]
+        srch = self._fast_search_check(c)
+        if srch:
+            return [srch]
+        opn = self._fast_open_app_check(c)
+        if opn:
+            return [opn]
+        return None
+
+    def _fast_compound_check(self, text: str) -> list[ActionStep] | None:
+        """Descompone oraciones complejas con conectores ('y', 'luego', etc.) en múltiples pasos independientes."""
+        clean = text.strip()
+        clean = re.sub(r"^(?:banshee|vanshee|banchi|oye banshee|oye banshee)[,\s]*", "", clean, flags=re.IGNORECASE).strip()
+
+        # No dividir búsquedas de marcas compuestas
+        if re.search(r"^busca\s+(?:solo\s+todo|solotodo)", clean, flags=re.IGNORECASE):
+            return None
+
+        # Si es 'abre X y busca Y', eso es un comando atómico de búsqueda (cubierto por _fast_search_check)
+        if re.search(r"^(?:abre|inicia)\s+[a-zA-Z0-9_\-]+\s+y\s+(?:busca|buscar|encuentra)\s+", clean, flags=re.IGNORECASE):
+            return None
+        if re.search(r"^(?:busca|pon|reproduce)\s+.+\s+y\s+(?:reproduce|pon|dale\s+play)", clean, flags=re.IGNORECASE):
+            return None
+
+        delimiters = [r"\s*,\s*y\s+", r"\s+y\s+", r"\s+e\s+", r"\s+luego\s+", r"\s+despues\s+", r"\s+después\s+", r"\s*,\s*"]
+        pattern = "|".join(f"(?:{d})" for d in delimiters)
+
+        parts = [p.strip() for p in re.split(pattern, clean, flags=re.IGNORECASE) if p.strip()]
+        if len(parts) < 2:
+            return None
+
+        all_steps = []
+        for part in parts:
+            step_list = self._parse_single_clause(part)
+            if step_list:
+                all_steps.extend(step_list)
+            else:
+                return None
+
+        return all_steps if all_steps else None
 
     def _normalize_intent(self, raw_intent: str) -> str:
         raw = str(raw_intent).upper()
-        if any(w in raw for w in ["INTERACT", "SCREEN", "LINK", "PANTALLA", "RESULTADO"]):
+        if any(w in raw for w in ["WINDOW", "VENTANA", "SNAP", "TAB", "PESTAÑA", "PESTANA", "SPLIT", "POSITION", "POSICION", "LAYOUT"]):
+            return "WINDOW_CONTROL"
+        if any(w in raw for w in ["INTERACT", "LINK", "ENLACE", "RESULTADO", "CLICK_FIRST", "PLAY_FIRST"]):
             return "INTERACT_SCREEN"
         if any(w in raw for w in ["MEDIA", "PLAY", "PAUSE", "PAUSA", "VOLUME", "VOLUMEN", "MUTE", "TRACK", "SILENC"]):
             return "MEDIA_CONTROL"
@@ -475,7 +846,26 @@ class IntentParser:
         if fast_prompt:
             return fast_prompt
 
-        # 2. Chequeo rápido de integraciones directas (Spotify, Valorant, OBS, Audio Mixer, Hardware, Obsidian) (0ms)
+        # 1.1 Chequeo rápido de consulta o conexión de editores de código (0ms)
+        fast_editor = self._fast_editor_status_check(text_command)
+        if fast_editor:
+            return ParsedPipeline(
+                raw_text=text_command,
+                steps=[fast_editor],
+                confidence=1.0
+            )
+
+        # 2. Chequeo rápido de comandos de ventanas, posicionamiento y pestañas (0ms)
+        fast_window = self._fast_window_check(text_command)
+        if fast_window:
+            steps = fast_window if isinstance(fast_window, list) else [fast_window]
+            return ParsedPipeline(
+                raw_text=text_command,
+                steps=steps,
+                confidence=1.0
+            )
+
+        # 3. Chequeo rápido de integraciones directas (Spotify, Valorant, OBS, Audio Mixer, Hardware, Obsidian) (0ms)
         fast_integ = self._fast_integration_check(text_command)
         if fast_integ:
             return ParsedPipeline(
@@ -484,7 +874,7 @@ class IntentParser:
                 confidence=1.0
             )
 
-        # 3. Chequeo rápido de acciones relativas en pantalla (0ms)
+        # 4. Chequeo rápido de acciones relativas en pantalla (0ms)
         fast_relative = self._fast_relative_action_check(text_command)
         if fast_relative:
             return ParsedPipeline(
@@ -493,7 +883,7 @@ class IntentParser:
                 confidence=1.0
             )
 
-        # 4. Chequeo rápido de control multimedia determinista (0ms)
+        # 5. Chequeo rápido de control multimedia determinista (0ms)
         fast_media = self._fast_media_check(text_command)
         if fast_media:
             return ParsedPipeline(
@@ -502,7 +892,7 @@ class IntentParser:
                 confidence=1.0
             )
 
-        # 4. Chequeo rápido de búsqueda determinista (0ms)
+        # 6. Chequeo rápido de búsqueda determinista (0ms)
         fast_search = self._fast_search_check(text_command)
         if fast_search:
             return ParsedPipeline(
@@ -511,7 +901,25 @@ class IntentParser:
                 confidence=1.0
             )
 
-        # 5. Análisis con Ollama para comandos complejos o multi-acción
+        # 7. Chequeo rápido de descomposición de comandos compuestos multi-acción (0ms)
+        fast_compound = self._fast_compound_check(text_command)
+        if fast_compound:
+            return ParsedPipeline(
+                raw_text=text_command,
+                steps=fast_compound,
+                confidence=1.0
+            )
+
+        # 8. Chequeo rápido de apertura simple de apps (0ms)
+        fast_open = self._fast_open_app_check(text_command)
+        if fast_open:
+            return ParsedPipeline(
+                raw_text=text_command,
+                steps=[fast_open],
+                confidence=1.0
+            )
+
+        # 9. Análisis con Ollama para comandos complejos, variados o multi-acción
         try:
             response = ollama.chat(
                 model=settings.OLLAMA_MODEL,
@@ -523,7 +931,7 @@ class IntentParser:
             )
             data = json.loads(response["message"]["content"])
             raw_steps = data.get("steps", [])
-            
+
             steps = []
             for s in raw_steps:
                 params = StepParameters(**(s.get("parameters") or {}))
@@ -535,7 +943,7 @@ class IntentParser:
                     target=str(s.get("target", "")).strip(),
                     parameters=params
                 ))
-                
+
             return ParsedPipeline(
                 raw_text=text_command,
                 steps=steps,
@@ -544,3 +952,4 @@ class IntentParser:
         except Exception as e:
             print(f"[NLU Error] Fallo al parsear comandos compuestos: {e}")
             return ParsedPipeline(raw_text=text_command, steps=[])
+

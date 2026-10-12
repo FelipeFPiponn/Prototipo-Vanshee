@@ -2,7 +2,12 @@ import os
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent.parent
+def _get_project_root() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent.parent.parent
+
+ROOT = _get_project_root()
 
 def get_startup_folder() -> Path:
     appdata = os.getenv("APPDATA")
@@ -44,11 +49,16 @@ def set_autostart(enable: bool) -> bool:
         startup_dir = get_startup_folder()
         startup_dir.mkdir(parents=True, exist_ok=True)
 
-        pythonw_exe = ROOT / ".venv" / "Scripts" / "pythonw.exe"
-        run_ui_py = ROOT / "run_ui.py"
-
-        # VBScript ejecuta pythonw completamente invisible sin ventana negra de terminal
-        vbs_content = f'''Set WshShell = CreateObject("WScript.Shell")
+        if getattr(sys, "frozen", False):
+            exe_path = Path(sys.executable)
+            vbs_content = f'''Set WshShell = CreateObject("WScript.Shell")
+WshShell.CurrentDirectory = "{str(ROOT)}"
+WshShell.Run """{str(exe_path)}""", 0, False
+'''
+        else:
+            pythonw_exe = ROOT / ".venv" / "Scripts" / "pythonw.exe"
+            run_ui_py = ROOT / "run_ui.py"
+            vbs_content = f'''Set WshShell = CreateObject("WScript.Shell")
 WshShell.CurrentDirectory = "{str(ROOT)}"
 WshShell.Run """{str(pythonw_exe)}"" ""{str(run_ui_py)}""", 0, False
 '''
