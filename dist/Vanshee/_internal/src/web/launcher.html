@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vanshee Launcher</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    html, body {
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      background: #0284c7;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      user-select: none;
+    }
+    .launcher-btn-standalone {
+      width: 100vw;
+      height: 100vh;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #0284c7 0%, #00d2ff 100%);
+      border: 2px solid rgba(255, 255, 255, 0.65);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      position: relative;
+    }
+    .launcher-icon {
+      font-size: 26px;
+      filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.4));
+    }
+    .status-badge {
+      position: absolute;
+      top: 2px;
+      right: 2px;
+      background: #10b981;
+      color: #fff;
+      font-size: 8px;
+      font-weight: 800;
+      padding: 1px 3px;
+      border-radius: 9999px;
+      border: 1px solid #0284c7;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+      letter-spacing: 0.2px;
+      pointer-events: none;
+    }
+    .status-badge.listening {
+      background: #8b5cf6;
+    }
+  </style>
+</head>
+<body>
+  <div class="launcher-btn-standalone" id="btnOpenChat" title="Abrir Vanshee (o di 'Vanshee')">
+    <span class="launcher-icon">⚡</span>
+    <span class="status-badge" id="statusBadge">Online</span>
+  </div>
+
+  <script>
+    const btn = document.getElementById('btnOpenChat');
+    const badge = document.getElementById('statusBadge');
+
+    async function toggleChat() {
+      try {
+        await fetch('/api/window/toggle_chat', { method: 'POST' });
+      } catch (e) {
+        console.warn('Error toggling chat:', e);
+      }
+    }
+
+    if (btn) {
+      btn.addEventListener('click', toggleChat);
+    }
+
+    // WebSocket listener for live wake status
+    function initWS() {
+      const loc = window.location;
+      const wsUrl = (loc.protocol === 'https:' ? 'wss://' : 'ws://') + loc.host + '/ws/live';
+      const ws = new WebSocket(wsUrl);
+
+      ws.onmessage = (evt) => {
+        try {
+          const msg = JSON.parse(evt.data);
+          if (msg.type === 'wake_word_listening' || msg.type === 'wake_word_command') {
+            badge.textContent = 'Oído';
+            badge.classList.add('listening');
+            setTimeout(() => {
+              badge.textContent = 'Online';
+              badge.classList.remove('listening');
+            }, 3000);
+          }
+        } catch (e) {}
+      };
+
+      ws.onclose = () => setTimeout(initWS, 3000);
+    }
+    initWS();
+  </script>
+</body>
+</html>

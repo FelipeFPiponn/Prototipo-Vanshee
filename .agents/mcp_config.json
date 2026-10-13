@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "vanshee": {
+      "command": "c:\\Users\\Entoma\\Desktop\\vanshee-core\\.venv\\Scripts\\python.exe",
+      "args": ["-m", "src.integrations.mcp_server"],
+      "cwd": "c:\\Users\\Entoma\\Desktop\\vanshee-core"
+    }
+  }
+}

@@ -1,124 +1,127 @@
-# V.ANSHEE — Sistema Inteligente de Control por Voz y Aprendizaje de Rutinas
+# ⚡ V.ANSHEE Core - Sistema Autónomo de Control por Voz y Automatización para Windows
 
-**V.ANSHEE** es una solución tecnológica desarrollada como proyecto de perfil de egreso (Duoc UC, APT122), orientada a la automatización e interpretación en tiempo real de comandos de voz, procesamiento de lenguaje natural (NLP) y aprendizaje continuo de rutinas diarias.
-
----
-
-## 🚀 Inicio Rápido para Evaluadores y Terceros
-
-Este proyecto está optimizado para que cualquier persona que lo descargue o clone pueda ejecutarlo de inmediato sin requerir configuración compleja, compiladores de C++, servidores externos o dependencias nativas conflictivas.
-
-### Requisitos Previos
-- **Node.js**: Versión 18, 20 o 22 (LTS recomendada). Descargar desde [nodejs.org](https://nodejs.org/).
+**V.ANSHEE (Visual & Audio Natural System for Holistic Execution & Empowerment)** es un asistente y copiloto inteligente autónomo diseñado para controlar, automatizar y sincronizarse con el entorno operativo de **Windows OS** mediante lenguaje natural, comandos de voz y percepción contextual.
 
 ---
 
-### Opción 1: En Windows (Ejecución en 1 Clic)
-1. Descarga o clona este repositorio.
-2. Haz doble clic en el archivo **`start.bat`**.
-3. El script detectará Node.js, instalará las dependencias automáticamente si es la primera vez y abrirá `http://localhost:3000` en tu navegador.
+## 🌟 Nueva Interfaz de Control de Vanguardia (UI)
 
----
+Se ha incorporado una consola visual de última generación estilo estación de trabajo cyberpunk / HUD que resuelve las limitaciones de la línea de comandos tradicional y permite operar el sistema con máxima eficiencia.
 
-### Opción 2: Desde Terminal (Windows / Linux / macOS)
-1. Clona el repositorio e ingresa a la carpeta:
-   ```bash
-   git clone https://github.com/FelipeFPiponn/Prototipo-Vanshee.git
-   cd Prototipo-Vanshee
+### 🚀 Cómo Iniciar la Interfaz
+
+Puedes iniciar la consola de cualquiera de las siguientes formas:
+
+1. **PowerShell (Recomendado):**
+   ```powershell
+   .\start_vanshee.ps1
+   # o específicamente:
+   .\start_vanshee_ui.ps1
    ```
-2. Instala las dependencias:
-   ```bash
-   npm install
+
+2. **Doble clic desde el Explorador de Windows:**
+   - Ejecuta `start_vanshee_ui.bat`.
+
+3. **Ejecución directa en Python:**
+   ```powershell
+   .\.venv\Scripts\python.exe run_ui.py
    ```
-3. Inicia el servidor de desarrollo:
-   ```bash
-   npm run dev
-   ```
-4. Abre tu navegador en **`http://localhost:3000`**.
+
+*(Nota: Si deseas ejecutar el bucle clásico en terminal por voz, usa `.\start_vanshee.ps1 -Cli`)*
 
 ---
 
-## 🛠️ ¿Por qué esta solución resuelve los problemas de instalación de terceros?
+## 🖥️ Módulos de la Interfaz
 
-En prototipos tradicionales de Python con librerías nativas suelen presentarse múltiples fallos al compartirse con terceros:
-1. **Compiladores C++ y DLLs**: Librerías como `faster-whisper` y `ctranslate2` requieren herramientas de compilación de Microsoft Visual C++ y CUDA que la mayoría de los usuarios no tienen instaladas.
-2. **Dependencias del Sistema Operativo**: Paquetes como `pywin32` impiden la instalación en computadores con macOS o Linux.
-3. **Drivers de Audio y PortAudio**: Librerías como `PyAudio` o `sounddevice` fallan si faltan controladores de audio o librerías dinámicas locales.
-4. **Dependencia de Servidores Locales**: Modelos que exigen tener un daemon de `ollama` corriendo con modelos descargados de varios gigabytes fallan si el usuario no tiene Ollama configurado.
+### 1. ⚡ Centro de Mando (HUD)
+- **Neural Core Visualizer**: Orbe holográfico animado que reacciona en tiempo real a los estados del sistema:
+  - `LISTO` (Pulso cian suave)
+  - `ESCUCHANDO` (Resplandor violeta/carmesí reactivo a la voz)
+  - `RAZONANDO` (Giro dorado de inferencia con Ollama Llama 3.2)
+  - `EJECUTANDO` (Onda esmeralda de confirmación)
+- **Doble Modalidad de Entrada**:
+  - **Voz con Espectrograma**: Graba voz mediante el navegador o el micrófono local con visualizador de frecuencias en vivo en Canvas. Atajo global: `Ctrl + Espacio`.
+  - **Barra de Comandos en Lenguaje Natural**: Escribe directamente instrucciones sin depender del silencio ambiental.
+  - **Sugerencias Rápidas**: Chips de 1 clic para abrir VS Code, Chrome, Terminal, crear proyectos o generar archivos.
+- **Monitor de Contexto en Vivo**: Detecta la ventana activa del usuario en Windows y genera sugerencias inteligentes automáticas.
+- **Flujo de Ejecución (Pipeline Inspector)**: Muestra en tarjetas el desglose secuencial de pasos ejecutados con estado de éxito o error.
 
-**Solución implementada en V.ANSHEE:**
-- **STT en Tiempo Real**: Integración directa con la API de reconocimiento de voz del navegador (Web Speech API) con micrófono en vivo y captura de baja latencia sin drivers adicionales.
-- **Motor NLU Híbrido**: Funciona **100% de manera autónoma y offline** mediante el parser determinista que replica el esquema `intents_schema.json`, y además soporta opcionalmente modelos LLM (Google Gemini) configurando la variable de entorno en `.env`.
-- **Portabilidad Universal**: Ejecutable en Windows, macOS y Linux en cualquier navegador moderno.
+### 2. 🚀 Lanzador de Aplicaciones
+- Explora y busca al instante entre las **más de 140 aplicaciones locales indexadas** de tu equipo.
+- Filtros por categoría: *Desarrollo / IDE, Navegadores, Sistema & Terminal, Multimedia, Juegos*.
+- Botón de **Lanzamiento Inmediato** con un solo clic.
+
+### 3. 🧠 Inspector NLU & Pipeline
+- Permite escribir o dictar órdenes compuestas (ej: *"abre vs code e inicia un proyecto node llamado mi_web"*).
+- Visualiza la descomposición estructurada en JSON procesada por **Ollama (Llama 3.2)**.
+- Permite ejecutar pipelines inspeccionados de forma selectiva.
+
+### 4. 💾 Memoria Persistente & Aprendizaje
+- **Hechos Aprendidos (Brain Facts)**: Vista y gestión de hechos clave (ubicación preferida, última app, preferencias). Permite agregar hechos manualmente o eliminarlos.
+- **Comandos Dinámicos Aprendidos**: Diccionario de atajos aprendidos por V.ANSHEE con opción de borrado/olvido.
+- **Historial de Interacciones**: Registro completo de órdenes de voz y texto con estado de ejecución.
+- **Rutinas y Hábitos**: Patrones de uso detectados por frecuencia y franja horaria.
+
+### 5. ⚙️ Diagnóstico & Calibración de Hardware
+- **Test de Micrófono en Tiempo Real**: Mide nivel RMS y pico máximo con indicador de estado (Voz clara / Nivel bajo / Silencio).
+- **Control Deslizante de Sensibilidad**: Ajusta el umbral RMS dinámico (`AUDIO_THRESHOLD_RMS`) para micrófonos de baja o alta ganancia.
+- **Prueba de Voz TTS**: Prueba la síntesis de voz en español mediante Microsoft SAPI.
+- **Chequeo de Subsistemas**: Verificación de conectividad con Ollama, Faster-Whisper, base de datos SQLite y mapeador de pantalla.
 
 ---
 
-## 📐 Arquitectura del Sistema (4 Capas)
+## 🛠️ Arquitectura del Sistema
 
 ```
-        [ Entrada de Audio / Micrófono ] 
-                       │
-                       ▼
-        [ Módulo STT (Speech-to-Text) ] 
-                       │
-                       ▼
-        [ Motor NLP / NLU Parser ] ──── (Interpretación de Intención y Pasos)
-                                   │
-                    ┌──────────────┴──────────────┐
-                    ▼                             ▼
-        [ Dispatcher de OS / Resolver ]   [ Engine de Rutinas / ML ]
-        (Ejecución y Mapeo de Targets)    (Análisis de Patrones y Hábito)
+vanshee-core/
+├── config/
+│   ├── settings.py           # Configuraciones generales, audio, NLU y servidor
+│   └── intents_schema.json   # Esquema NLU de intenciones
+├── data/
+│   └── vanshee.db            # Base de datos persistente SQLite
+├── src/
+│   ├── audio/
+│   │   ├── recorder.py       # Captura de audio con calibración dinámica y VAD
+│   │   ├── stt_whisper.py    # Motor Speech-to-Text Faster-Whisper local
+│   │   ├── tts_engine.py     # Síntesis de voz con Windows SAPI
+│   │   └── voice_dialog.py   # Diálogos y confirmación por voz
+│   ├── executor/
+│   │   ├── app_indexer.py    # Indexación de accesos directos de Windows
+│   │   ├── dynamic_resolver.py # Resolución de apps, URLs y comandos
+│   │   ├── os_executor.py    # Ejecución de pipelines en el sistema operativo
+│   │   └── screen_mapper.py  # Detección de ventanas y contexto visual
+│   ├── nlu/
+│   │   └── intent_parser.py  # Descomposición de intenciones con Ollama Llama 3.2
+│   ├── routines/
+│   │   ├── db.py             # Esquema e inicialización de tablas SQLite
+│   │   └── habit_engine.py   # Registro y aprendizaje de hábitos
+│   ├── web/
+│   │   ├── index.html        # Estructura de la interfaz de usuario
+│   │   └── static/
+│   │       ├── css/vanshee.css # Sistema de diseño HUD futurista
+│   │       └── js/app.js       # Lógica cliente, Web Audio API y websockets
+│   ├── brain.py              # Coordinador central de percepción y acción
+│   ├── context_awareness.py  # Detección contextual y sugerencias
+│   ├── memory_store.py       # Almacenamiento persistente de hechos
+│   ├── semantic_memory.py    # Memoria semántica y similitud
+│   └── server.py             # Servidor API FastAPI / Uvicorn
+├── run_ui.py                 # Script de arranque de la consola y ventana de escritorio
+├── start_vanshee.ps1         # Script de inicio rápido (UI o CLI)
+├── start_vanshee_ui.ps1      # Lanzador PowerShell dedicado a la UI
+├── start_vanshee_ui.bat      # Lanzador .bat de doble clic
+└── requirements.txt          # Dependencias del proyecto
 ```
 
-1. **Capa 1: Captura & Transcripción (STT)**: Transforma la señal de voz del usuario en texto estructurado en tiempo real con indicador visual de escucha.
-2. **Capa 2: Interpretación Semántica (NLP)**: Modela la intención (`OPEN_APP`, `CREATE_PROJECT`, `SYSTEM_CONTROL`, `FORGET_COMMAND`), identifica entidades (aplicaciones, parámetros) y descompone comandos encadenados.
-3. **Capa 3: Capa de Despacho (OS Dispatcher & Dynamic Resolver)**:
-   - Resuelve software nativo y servicios web frecuentes (`KNOWN_TARGETS`).
-   - Memoria dinámica (`learned_commands`) para enseñar nuevos atajos con palabras clave personalizadas.
-   - Generador de proyectos de desarrollo (`python`, `node`, `react`, `csharp`).
-4. **Capa 4: Módulo de Rutinas y Aprendizaje (HabitEngine)**:
-   - Registro de histórico con estampas temporales, día de la semana (`day_of_week`) y hora (`hour_of_day`).
-   - Detección de patrones: si un comando se repite 3 o más veces en el mismo bloque horario, se consolida como rutina sugerida.
-   - Gráfico de distribución de 24 horas y disparador de sugerencias en tiempo real.
-
 ---
 
-## 🧪 Ejemplos de Prueba Recomendados
+## 🧪 Verificación del Sistema
 
-Puedes probar los siguientes comandos mediante voz o escribiéndolos en la consola:
+Para comprobar que todos los componentes requeridos están listos:
+```powershell
+.\.venv\Scripts\python.exe scripts\check_system.py
+```
 
-- **Comando encadenado de desarrollo:**
-  > *"ejecuta vs code e inicia un nuevo proyecto python llamado mi_api"*
-  - *Resultado:* Descompone en 2 pasos: Apertura de VS Code y generación de la estructura del proyecto `mi_api`.
-
-- **Comando encadenado de servicios:**
-  > *"abrir chat gpt y spotify"*
-  - *Resultado:* Resuelve ambos accesos mediante el Dynamic Resolver y los abre simultáneamente.
-
-- **Comando de sistema y herramientas:**
-  > *"ejecutar terminal y abrir github"*
-
-- **Memoria dinámica (Olvidar comando):**
-  > *"olvida spotify"*
-
-- **Prueba del Motor de Hábitos:**
-  - Ve a la pestaña **Motor de Hábitos** para observar las rutinas detectadas y el gráfico de 24 horas. Puedes pulsar **"Probar patrón x3"** para ver al motor identificar un hábito en tiempo real.
-
----
-
-## ⚙️ Configuración Opcional (`.env`)
-
-El sistema funciona de forma nativa sin ninguna API key. Si deseas activar el parseo avanzado con Gemini:
-1. Copia `.env.example` a `.env`:
-   ```bash
-   cp .env.example .env
-   ```
-2. Añade tu API Key de Gemini:
-   ```env
-   GEMINI_API_KEY=tu_clave_aqui
-   ```
-
----
-
-## 👨‍💻 Autores
-- Proyecto APT122 — Duoc UC
+Para correr la suite de pruebas unitarias:
+```powershell
+.\.venv\Scripts\python.exe -m unittest tests/test_basic_tasks.py
+```

@@ -1,0 +1,65 @@
+{
+  "name": "vanshee-editor-bridge",
+  "displayName": "V.ANSHEE Editor Bridge",
+  "description": "Conexión directa y telemetría en tiempo real entre V.ANSHEE AI y editores de código (Antigravity, VS Code, Cursor).",
+  "version": "1.0.0",
+  "publisher": "vanshee-core",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Other",
+    "AI",
+    "Productivity"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "vanshee.connect",
+        "title": "V.ANSHEE: Conectar con V.ANSHEE Core",
+        "category": "V.ANSHEE"
+      },
+      {
+        "command": "vanshee.disconnect",
+        "title": "V.ANSHEE: Desconectar",
+        "category": "V.ANSHEE"
+      },
+      {
+        "command": "vanshee.status",
+        "title": "V.ANSHEE: Ver estado de conexión",
+        "category": "V.ANSHEE"
+      }
+    ],
+    "configuration": {
+      "title": "V.ANSHEE Bridge",
+      "properties": {
+        "vanshee.serverUrl": {
+          "type": "string",
+          "default": "ws://localhost:8000/ws/editor",
+          "description": "URL del endpoint WebSocket de V.ANSHEE Core."
+        },
+        "vanshee.autoConnect": {
+          "type": "boolean",
+          "default": true,
+          "description": "Conectar automáticamente a V.ANSHEE al iniciar el editor."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.80.0",
+    "@types/ws": "^8.5.10",
+    "typescript": "^5.3.0",
+    "ws": "^8.16.0"
+  }
+}
