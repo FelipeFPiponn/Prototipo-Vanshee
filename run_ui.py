@@ -71,12 +71,13 @@ def get_ollama_executable() -> Optional[str]:
     if p and os.path.exists(p):
         return p
 
-    # 2. Rutas estándar de instalación en Windows
+    # 2. Rutas estándar de instalación en Windows y carpetas portables
     candidates = [
+        str(ROOT / "ollama" / "ollama.exe"),
+        str(ROOT / "tools" / "ollama" / "ollama.exe"),
         os.path.expandvars(r"%LOCALAPPDATA%\Programs\Ollama\ollama.exe"),
         os.path.expandvars(r"%ProgramFiles%\Ollama\ollama.exe"),
         os.path.expandvars(r"%ProgramFiles(x86)%\Ollama\ollama.exe"),
-        r"C:\Users\Entoma\AppData\Local\Programs\Ollama\ollama.exe",
     ]
     for c in candidates:
         if os.path.exists(c):

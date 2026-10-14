@@ -26,3 +26,9 @@ Thumbs.db
 Desktop.ini
 *.tmp
 *.log
+
+# PyInstaller & Installer outputs
+build/
+dist/
+dist_installer/
+installer/offline_wheels/

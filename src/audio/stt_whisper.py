@@ -32,6 +32,7 @@ class WhisperSTT:
     def __init__(self, model_size: str | None = None, device: str | None = None):
         _setup_cuda_dlls()
         size = model_size or getattr(settings, "STT_MODEL_SIZE", "medium")
+        model_target = self._resolve_model_path(size)
         
         # Detección automática de GPU NVIDIA (CUDA)
         if device is None:
@@ -51,17 +52,44 @@ class WhisperSTT:
 
         # Intento de carga con fallback automático a CPU si falta alguna librería
         try:
-            print(f"[STT] Cargando modelo Faster-Whisper '{size}' en {device.upper()} ({compute_type})...")
-            self.model = WhisperModel(size, device=device, compute_type=compute_type)
-            self.current_model = size
+            print(f"[STT] Cargando modelo Faster-Whisper '{size}' ({model_target}) en {device.upper()} ({compute_type})...")
+            self.model = WhisperModel(model_target, device=device, compute_type=compute_type)
+            self.current_model = model_target
             self.current_device = device
         except Exception as e:
             print(f"[STT Warning] Fallo al iniciar en {device.upper()}: {e}. Cambiando a CPU (int8)...")
             device = "cpu"
             compute_type = "int8"
-            self.model = WhisperModel(size, device=device, compute_type=compute_type)
-            self.current_model = size
+            self.model = WhisperModel(model_target, device=device, compute_type=compute_type)
+            self.current_model = model_target
             self.current_device = device
+
+    @staticmethod
+    def _resolve_model_path(size: str) -> str:
+        """Resuelve la ruta local del modelo Faster-Whisper para funcionamiento 100% offline."""
+        try:
+            from config.settings import BASE_DIR
+            candidates = [
+                BASE_DIR / "models" / "whisper" / size,
+                BASE_DIR / "models" / size,
+                BASE_DIR / "data" / "models" / size,
+            ]
+            for c in candidates:
+                if c.exists() and (c / "model.bin").exists():
+                    print(f"[STT] Usando modelo Faster-Whisper local offline: {c}")
+                    return str(c)
+
+            # Búsqueda en caché Hugging Face del usuario
+            hf_cache_dir = Path.home() / ".cache" / "huggingface" / "hub" / f"models--Systran--faster-whisper-{size}" / "snapshots"
+            if hf_cache_dir.exists():
+                for snap in hf_cache_dir.iterdir():
+                    if snap.is_dir() and (snap / "model.bin").exists():
+                        print(f"[STT] Usando modelo Faster-Whisper desde caché local HF: {snap}")
+                        return str(snap)
+        except Exception as e:
+            print(f"[STT Warning] Error resolviendo ruta local de Whisper: {e}")
+
+        return size
 
     def transcribe(self, audio_input: str | Path | np.ndarray) -> str:
         """Transcribe audio desde una ruta de archivo .wav o directamente desde un array numpy en memoria RAM."""

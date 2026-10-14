@@ -8,7 +8,8 @@ $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Python = Join-Path $Root ".venv\Scripts\python.exe"
 
 if (-not (Test-Path $Python)) {
-    Write-Host "[V.ANSHEE] No existe .venv. Crea el entorno con: py -m venv .venv" -ForegroundColor Yellow
+    Write-Host "[V.ANSHEE] No se encontro .venv en este equipo." -ForegroundColor Yellow
+    Write-Host "Ejecuta 'powershell -ExecutionPolicy Bypass -File .\install_vanshee.ps1' (o 'installer\install_dev_offline.bat') para configurarlo." -ForegroundColor Cyan
     exit 1
 }
 
