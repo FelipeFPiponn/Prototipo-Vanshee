@@ -19,15 +19,13 @@ class RoutineLogger:
             intent = command.intent
             target = command.target
 
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            INSERT INTO execution_logs (full_command, raw_text, intent, target, day_of_week, hour_of_day)
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (raw_text, raw_text, intent, target, now.weekday(), now.hour)
-        )
-        conn.commit()
-        conn.close()
+        from src.routines.db import get_db_cursor
+        with get_db_cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO execution_logs (full_command, raw_text, intent, target, day_of_week, hour_of_day)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (raw_text, raw_text, intent, target, now.weekday(), now.hour)
+            )
         print("[Routine Logger] Ejecución guardada para análisis temporal.")

@@ -57,6 +57,11 @@ for pkg in ['ctranslate2', 'faster_whisper', 'sounddevice', 'webview']:
     except Exception as e:
         print(f"[Warning Hook] No se pudo recolectar {pkg}: {e}")
 
+try:
+    hiddenimports += collect_submodules('src')
+except Exception as e:
+    print(f"[Warning Hook] No se pudieron recolectar submodulos de src: {e}")
+
 a = Analysis(
     ['run_ui.py'],
     pathex=['.'],

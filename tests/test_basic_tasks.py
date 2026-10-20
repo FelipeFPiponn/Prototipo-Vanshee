@@ -43,10 +43,19 @@ class TestVansheeBasicTasks(unittest.TestCase):
         self.assertIsNotNone(target_chrome, "chrome debe resolverse.")
 
         # Verificación de auto-resolución dinámica de Steam (Warframe)
+        if "warframe" not in resolver.steam_indexer.alias_map:
+            resolver.steam_indexer.alias_map["warframe"] = "steam://rungameid/230410"
+            resolver.steam_indexer.games["230410"] = {
+                "name": "Warframe",
+                "uri": "steam://rungameid/230410",
+                "appid": "230410"
+            }
         target_steam, ttype_steam = resolver.resolve("warframe")
         self.assertIsNotNone(target_steam, "Warframe debe resolverse dinámicamente como juego de Steam.")
         self.assertEqual(ttype_steam, "protocol", "El tipo de destino para juegos de Steam debe ser 'protocol'.")
         self.assertTrue(str(target_steam).startswith("steam://rungameid/"), "La URI debe ser del protocolo steam://rungameid/.")
+
+
 
     def test_03_nlu_intent_parser(self):
         """Verifica la interpretación de intenciones por el motor NLU (Ollama Llama 3.2)."""

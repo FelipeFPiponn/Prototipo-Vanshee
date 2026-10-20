@@ -5,10 +5,11 @@ import asyncio
 import sqlite3
 import tempfile
 import time
+import threading
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -32,11 +33,20 @@ from src.integrations.editor_hub import editor_hub
 
 app = FastAPI(title="V.ANSHEE Core Assistant Console", version="2.5.0")
 
+ALLOWED_ORIGINS = [
+    f"http://127.0.0.1:{settings.WEB_PORT}",
+    f"http://localhost:{settings.WEB_PORT}",
+    f"http://{settings.WEB_HOST}:{settings.WEB_PORT}",
+    "http://127.0.0.1",
+    "http://localhost",
+    "null",  # Soporte para pywebview / webview embebido local
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -61,6 +71,7 @@ class SystemState:
         self.active_connections: list[WebSocket] = []
         self.speak_tts_enabled: bool = True
         self.wake_detector: Optional[WakeWordDetector] = None
+        self.main_loop: Optional[asyncio.AbstractEventLoop] = None
 
 state = SystemState()
 
@@ -111,6 +122,23 @@ async def broadcast_ws(event_type: str, data: Any):
         if ws in state.active_connections:
             state.active_connections.remove(ws)
 
+def broadcast_sync(event_type: str, data: Any):
+    """Transmite de manera segura a todos los WebSockets desde hilos secundarios sin romper el loop de Uvicorn."""
+    if state.main_loop and state.main_loop.is_running():
+        try:
+            asyncio.run_coroutine_threadsafe(broadcast_ws(event_type, data), state.main_loop)
+            return
+        except Exception as e:
+            print(f"[BroadcastSync Error]: {e}")
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.run_coroutine_threadsafe(broadcast_ws(event_type, data), loop)
+        else:
+            loop.run_until_complete(broadcast_ws(event_type, data))
+    except Exception as e:
+        print(f"[BroadcastSync Fallback Error]: {e}")
+
 # Global command deduplication & debouncing
 import re
 
@@ -134,76 +162,93 @@ class CommandDebouncer:
 
 debouncer = CommandDebouncer(window_seconds=2.5)
 
-# Callback when Wake Word "Banshee" is heard in background
+# Callback when Wake Word "Vanshe" / "Banshee" is heard in background
 def on_wake_word_detected(full_phrase: str, trailing_command: str):
-    print(f"\n[Banshee Wake Trigger] Frase: '{full_phrase}' | Comando detectado: '{trailing_command}'")
+    print(f"\n[Vanshee Wake Trigger] Frase: '{full_phrase}' | Comando detectado: '{trailing_command}'")
     
     # Mostrar y enfocar automáticamente la ventana de chat al hablar
     window_bridge.show_chat()
-    
-    # Broadcast wake word event to all UI clients
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
     
     clean_cmd = trailing_command.strip()
     if clean_cmd:
         if debouncer.is_duplicate(clean_cmd):
             print(f"[Server Debounce] Comando duplicado ignorado desde WakeWord: '{clean_cmd}'")
-            loop.close()
             return
 
-        # User said "Banshee abre chrome" in one sentence
-        loop.run_until_complete(broadcast_ws("wake_word_command", {
-            "phrase": full_phrase,
+        display_phrase = full_phrase.strip()
+        # Asegurar que en el chat el usuario siempre vea "vanshe [comando]" si el prefijo fue podado
+        if not re.search(r"\b(vanshe|banshe|vanshee|banshee)\b", display_phrase, re.IGNORECASE):
+            display_phrase = f"vanshe {clean_cmd}"
+
+        # 1. Mostrar de inmediato la burbuja del usuario con su comando en el chat
+        broadcast_sync("wake_word_command", {
+            "phrase": display_phrase,
             "command": clean_cmd
-        }))
-        # Execute directly
+        })
+
+        # 2. Ejecutar la acción correspondiente con el cerebro de Vanshee
         brain = get_brain()
         res = brain.handle_user_input(clean_cmd)
+
         res_payload = {
             "source": "wake_word",
             "success": res.success,
             "response_text": res.response_text,
             "plan_summary": res.plan_summary,
             "context": {
-                "app_name": res.context.app_name,
-                "window_title": res.context.window_title,
-                "suggestion": res.context.suggestion
+                "app_name": res.context.app_name if res.context else "",
+                "window_title": res.context.window_title if res.context else "",
+                "suggestion": res.context.suggestion if res.context else ""
             }
         }
         debouncer.last_result = res_payload
-        loop.run_until_complete(broadcast_ws("command_completed", res_payload))
+        broadcast_sync("command_completed", res_payload)
     else:
-        # User said "Banshee" only -> acknowledge
+        # El usuario solo dijo "Vanshe" -> responder con "¿Dime?" y abrir escucha activa
         tts = get_tts()
-        tts.speak("¿Dime?", block=False)
-        loop.run_until_complete(broadcast_ws("wake_word_listening", {
+        tts.speak("¿Dime?", block=True)
+        if state.wake_detector:
+            state.wake_detector.trigger_manual_listen(duration=10.0)
+        broadcast_sync("wake_word_listening", {
             "phrase": full_phrase
-        }))
-    
-    loop.close()
+        })
 
 def init_wake_word():
     if state.wake_detector is None and getattr(settings, "WAKE_WORD_ENABLED", True):
+        try:
+            import pythoncom
+            pythoncom.CoInitialize()
+        except Exception:
+            pass
+
+        # Auto-enlazar al micrófono real activo del sistema si no ha sido configurado manualmente
+        if getattr(settings, "AUDIO_INPUT_DEVICE", None) is None:
+            try:
+                devices, def_idx, def_name = get_system_available_microphones()
+                if def_idx is not None:
+                    settings.AUDIO_INPUT_DEVICE = def_idx
+                    settings.AUDIO_DEVICE_NAME = def_name or ""
+                    print(f"[Audio] Micrófono activo detectado y auto-asignado: Dispositivo {def_idx} ({def_name})")
+            except Exception as e:
+                print(f"[Audio] Error auto-detectando micrófono: {e}")
+
         stt = get_stt()
         if stt:
             state.wake_detector = WakeWordDetector(
                 stt_engine=stt,
                 on_wake_detected=on_wake_word_detected,
-                threshold_rms=getattr(settings, "AUDIO_THRESHOLD_RMS", 180.0),
+                threshold_rms=getattr(settings, "AUDIO_THRESHOLD_RMS", 45.0),
                 device_index=getattr(settings, "AUDIO_INPUT_DEVICE", None)
             )
             state.wake_detector.start()
-            try:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                loop.run_until_complete(broadcast_ws("stt_ready", {
-                    "status": "ready",
-                    "model": settings.STT_MODEL_SIZE
-                }))
-                loop.close()
-            except Exception:
-                pass
+            broadcast_sync("stt_ready", {
+                "status": "ready",
+                "model": settings.STT_MODEL_SIZE
+            })
+            broadcast_sync("mic_state_changed", {
+                "is_listening": True,
+                "mode": "listening"
+            })
 
 # Models
 class CommandRequest(BaseModel):
@@ -233,6 +278,10 @@ class SettingsUpdateRequest(BaseModel):
 class PinWindowRequest(BaseModel):
     topmost: bool
 
+class MoveWindowRequest(BaseModel):
+    x: int
+    y: int
+
 class WindowBridge:
     def __init__(self):
         self.chat_window = None
@@ -250,10 +299,15 @@ class WindowBridge:
                 shown = True
             except Exception:
                 pass
+        if self.launcher_window and hasattr(self.launcher_window, "hide"):
+            try:
+                self.launcher_window.hide()
+            except Exception:
+                pass
         try:
             import win32gui
             import win32con
-            for title in ["Banshee Chat", "Banshee"]:
+            for title in ["Vanshee Chat", "Vanshee", "Banshee Chat", "Banshee"]:
                 hwnd = win32gui.FindWindow(None, title)
                 if hwnd:
                     win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
@@ -275,10 +329,15 @@ class WindowBridge:
                 hidden = True
             except Exception:
                 pass
+        if self.launcher_window and hasattr(self.launcher_window, "show"):
+            try:
+                self.launcher_window.show()
+            except Exception:
+                pass
         try:
             import win32gui
             import win32con
-            for title in ["Banshee Chat", "Banshee"]:
+            for title in ["Vanshee Chat", "Banshee Chat"]:
                 hwnd = win32gui.FindWindow(None, title)
                 if hwnd:
                     win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
@@ -301,18 +360,42 @@ class WindowBridge:
 window_bridge = WindowBridge()
 
 # API Routes
+@app.post("/api/window/move")
+async def move_window(req: MoveWindowRequest):
+    """Mueve la ventana de chat a las coordenadas especificadas."""
+    if window_bridge.chat_window:
+        try:
+            window_bridge.chat_window.move(req.x, req.y)
+            return {"status": "ok", "x": req.x, "y": req.y}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+    return {"status": "error", "message": "no chat window"}
+
 @app.post("/api/window/pin")
 async def toggle_window_pin(req: PinWindowRequest):
     """Fija o desfija la ventana de Banshee como 'Siempre visible' (HWND_TOPMOST) en Windows."""
+    pinned = False
+    if window_bridge.chat_window:
+        try:
+            window_bridge.chat_window.on_top = req.topmost
+            pinned = True
+        except Exception:
+            pass
     try:
         import ctypes
         import win32gui
         brain = get_brain()
         hwnd = 0
         if win32gui:
-            win = brain.executor.window_manager.find_window("banshee")
-            if win:
-                hwnd = win["hwnd"]
+            for title in ["Vanshee Chat", "Vanshee", "Banshee Chat", "Banshee"]:
+                h = win32gui.FindWindow(None, title)
+                if h:
+                    hwnd = h
+                    break
+            if not hwnd:
+                win = brain.executor.window_manager.find_window("vanshee")
+                if win:
+                    hwnd = win["hwnd"]
             if not hwnd:
                 hwnd = win32gui.GetForegroundWindow()
         if hwnd:
@@ -322,6 +405,7 @@ async def toggle_window_pin(req: PinWindowRequest):
     except Exception as e:
         print(f"[Pin Window Error] {e}")
     return {"status": "ok", "topmost": req.topmost}
+
 
 @app.post("/api/window/show_chat")
 async def show_chat_window():
@@ -397,6 +481,7 @@ async def get_status():
         "selected_device_name": cur_dev_name or "Predeterminado de Windows",
         "selected_voice": getattr(settings, "TTS_VOICE", "es-ES-ElviraNeural"),
         "wakeword_enabled": getattr(settings, "WAKE_WORD_ENABLED", True),
+        "mic_listening": state.wake_detector.is_listening_active if (state.wake_detector and getattr(settings, "WAKE_WORD_ENABLED", True)) else True,
         "autostart_enabled": is_autostart_enabled(),
         "indexed_apps_count": len(indexer.app_index),
         "database": {
@@ -423,58 +508,238 @@ async def get_context():
         "suggestion": context.suggestion,
     }
 
-# Audio Devices Management
-@app.get("/api/audio/devices")
-async def list_audio_devices():
-    """Enumera todos los micrófonos y entradas de audio disponibles en Windows."""
-    devices = []
-    default_input_idx = None
+def get_system_available_microphones(refresh: bool = False) -> tuple[list[dict], Optional[int], Optional[str]]:
+    """
+    Detecta exclusivamente los dispositivos de entrada de audio realmente DISPONIBLES y activos en el sistema.
+    Filtra duplicados entre APIs de PortAudio (MME, DirectSound, WASAPI, WDM-KS), descarta dispositivos
+    desconectados/deshabilitados, mapeadores genéricos y dispositivos de loopback.
+    """
     try:
-        def_devs = sd.default.device
-        default_input_idx = def_devs[0] if def_devs else None
+        import pythoncom
+        pythoncom.CoInitialize()
     except Exception:
         pass
 
-    current_selected = getattr(settings, "AUDIO_INPUT_DEVICE", None)
+    if refresh:
+        was_paused = False
+        if state.wake_detector:
+            was_paused = state.wake_detector.is_paused
+            state.wake_detector.pause()
+            time.sleep(0.15)
+        try:
+            sd._terminate()
+            sd._initialize()
+        except Exception as e:
+            print(f"[Audio] Error reinicializando PortAudio: {e}")
+        if state.wake_detector and not was_paused:
+            time.sleep(0.15)
+            state.wake_detector.resume()
 
+    active_windows_mics = {}
+    default_mic_id = None
+    default_friendly_name = None
+
+    # 1. Consultar a la API nativa de Windows (CoreAudio / pycaw) el estado real del hardware
     try:
-        all_devs = sd.query_devices()
-        for idx, d in enumerate(all_devs):
-            if d.get("max_input_channels", 0) > 0:
-                name = d.get("name", f"Micrófono {idx}")
-                is_default = (idx == default_input_idx)
-                is_selected = (idx == current_selected) or (current_selected is None and is_default)
-                devices.append({
-                    "index": idx,
-                    "name": name,
-                    "channels": d.get("max_input_channels", 1),
-                    "default_samplerate": int(d.get("default_samplerate", 16000)),
-                    "is_default": is_default,
-                    "is_selected": is_selected
-                })
-    except Exception as e:
-        print(f"[Audio Error] enumerando dispositivos: {e}")
+        from pycaw.pycaw import AudioUtilities, AudioDeviceState
+        try:
+            def_mic = AudioUtilities.GetMicrophone()
+            if def_mic:
+                default_mic_id = def_mic.GetId()
+        except Exception:
+            pass
 
+        for d in AudioUtilities.GetAllDevices():
+            st = getattr(d, "state", None)
+            is_active = (st == AudioDeviceState.Active) or (st == 1)
+            if is_active:
+                fname = getattr(d, "FriendlyName", "").strip()
+                if fname:
+                    is_def = (d.id == default_mic_id)
+                    if is_def:
+                        default_friendly_name = fname
+                    active_windows_mics[fname.lower()] = {
+                        "name": fname,
+                        "is_default": is_def,
+                        "id": d.id
+                    }
+    except Exception as e:
+        print(f"[Audio] Warning consultando pycaw: {e}")
+
+    # 2. Elegir Host API en PortAudio (DirectSound ofrece nombres completos y conversión de muestreo nativa)
+    hostapis = sd.query_hostapis()
+    chosen_api_idx = None
+    for i, h in enumerate(hostapis):
+        if "directsound" in h["name"].lower():
+            chosen_api_idx = i
+            break
+    if chosen_api_idx is None:
+        for i, h in enumerate(hostapis):
+            if "mme" in h["name"].lower():
+                chosen_api_idx = i
+                break
+    if chosen_api_idx is None:
+        chosen_api_idx = sd.default.hostapi
+
+    current_selected = getattr(settings, "AUDIO_INPUT_DEVICE", None)
+    current_selected_name = getattr(settings, "AUDIO_DEVICE_NAME", "")
+
+    all_devs = sd.query_devices()
+    devices = []
+    seen_names = set()
+    found_default_idx = None
+
+    for idx, d in enumerate(all_devs):
+        if d.get("max_input_channels", 0) <= 0:
+            continue
+        if d.get("hostapi") != chosen_api_idx:
+            continue
+
+        raw_name = d.get("name", "").strip()
+        lower_name = raw_name.lower()
+
+        # Omitir entradas virtuales / genéricas de Windows
+        if any(term in lower_name for term in [
+            "sound mapper", "controlador primario", "primary sound capture",
+            "mezcla estéreo", "stereo mix", "bthhfenum"
+        ]):
+            continue
+
+        # Verificar si sounddevice puede abrir el stream de captura sin fallar
+        try:
+            sd.check_input_settings(device=idx, channels=1, samplerate=16000)
+        except Exception:
+            continue
+
+        # Validar contra los dispositivos activos reales de Windows si pycaw devolvió resultados
+        is_default = False
+        if active_windows_mics:
+            matched = False
+            for act_lower, act_info in active_windows_mics.items():
+                if act_lower in lower_name or lower_name in act_lower:
+                    matched = True
+                    if act_info["is_default"]:
+                        is_default = True
+                    break
+            if not matched:
+                continue
+        else:
+            is_default = (idx == sd.default.device[0])
+
+        if is_default:
+            found_default_idx = idx
+
+        clean_name = raw_name
+        if clean_name in seen_names:
+            continue
+        seen_names.add(clean_name)
+
+        is_selected = False
+        if current_selected is not None and current_selected == idx:
+            is_selected = True
+        elif current_selected_name and current_selected_name.lower() in clean_name.lower():
+            is_selected = True
+
+        devices.append({
+            "index": idx,
+            "name": clean_name,
+            "channels": d.get("max_input_channels", 1),
+            "default_samplerate": int(d.get("default_samplerate", 16000)),
+            "is_default": is_default,
+            "is_selected": is_selected
+        })
+
+    return devices, found_default_idx, default_friendly_name
+
+# Audio Devices Management
+@app.get("/api/audio/devices")
+async def list_audio_devices(refresh: bool = False):
+    """Enumera únicamente los micrófonos físicos o activos realmente disponibles en Windows."""
+    devices, default_idx, default_name = get_system_available_microphones(refresh=refresh)
+    current_selected = getattr(settings, "AUDIO_INPUT_DEVICE", None)
+    current_selected_name = getattr(settings, "AUDIO_DEVICE_NAME", "")
     return {
         "devices": devices,
         "selected_index": current_selected,
-        "default_index": default_input_idx
+        "selected_name": current_selected_name,
+        "default_index": default_idx,
+        "default_name": default_name
+    }
+
+@app.post("/api/audio/devices/refresh")
+async def refresh_audio_devices():
+    """Fuerza la re-enumeración de hardware de audio en Windows para detectar dispositivos recién conectados."""
+    devices, default_idx, default_name = get_system_available_microphones(refresh=True)
+    current_selected = getattr(settings, "AUDIO_INPUT_DEVICE", None)
+    current_selected_name = getattr(settings, "AUDIO_DEVICE_NAME", "")
+    return {
+        "status": "refreshed",
+        "devices": devices,
+        "selected_index": current_selected,
+        "selected_name": current_selected_name,
+        "default_index": default_idx,
+        "default_name": default_name
     }
 
 @app.post("/api/audio/devices/select")
 async def select_audio_device(req: DeviceSelectRequest):
-    settings.AUDIO_INPUT_DEVICE = req.device_index
+    target_idx = None if (req.device_index is None or req.device_index < 0) else req.device_index
+    
+    # Si seleccionó 'Predeterminado de Windows', resolver al micrófono físico activo
+    if target_idx is None:
+        try:
+            devices, def_idx, def_name = get_system_available_microphones(refresh=False)
+            if def_idx is not None:
+                target_idx = def_idx
+                req.device_name = def_name or req.device_name
+        except Exception as e:
+            print(f"[Audio] Error resolviendo dispositivo predeterminado: {e}")
+
+    settings.AUDIO_INPUT_DEVICE = target_idx
     settings.AUDIO_DEVICE_NAME = req.device_name or ""
     
-    # Actualizar detector de wake word si está activo
+    # Actualizar detector de wake word si está activo asegurando escucha continua
     if state.wake_detector:
-        state.wake_detector.update_settings(device_index=req.device_index)
+        state.wake_detector.update_settings(device_index=target_idx)
+        state.wake_detector.resume(user_initiated=False)
+        await broadcast_ws("mic_state_changed", {"is_listening": state.wake_detector.is_listening_active, "mode": "listening"})
 
     return {
         "status": "updated",
-        "device_index": req.device_index,
-        "device_name": settings.AUDIO_DEVICE_NAME
+        "device_index": target_idx,
+        "device_name": settings.AUDIO_DEVICE_NAME,
+        "is_listening": state.wake_detector.is_listening_active if state.wake_detector else True
     }
+
+@app.post("/api/audio/listen_toggle")
+async def toggle_audio_listening():
+    """
+    Alterna la escucha del micrófono entre Activo y Pausado (Mute / Unmute):
+    - Si está escuchando: pausa la escucha (micrófono en mute).
+    - Si está pausado: activa la escucha continua normal.
+    """
+    init_wake_word()
+    
+    if not state.wake_detector:
+        return {"status": "error", "message": "Detector de voz no disponible", "is_listening": False}
+
+    is_currently_listening = state.wake_detector.is_listening_active
+    
+    if is_currently_listening:
+        state.wake_detector.pause(user_initiated=True)
+        await broadcast_ws("mic_state_changed", {"is_listening": False, "mode": "paused"})
+        return {"status": "ok", "is_listening": False, "mode": "paused"}
+    else:
+        state.wake_detector.resume(user_initiated=True)
+        await broadcast_ws("mic_state_changed", {"is_listening": True, "mode": "listening"})
+        return {"status": "ok", "is_listening": True, "mode": "listening"}
+
+@app.get("/api/audio/listening_status")
+async def get_listening_status():
+    is_listening = True
+    if state.wake_detector and getattr(settings, "WAKE_WORD_ENABLED", True):
+        is_listening = state.wake_detector.is_listening_active
+    return {"is_listening": is_listening, "mode": "listening" if is_listening else "paused"}
 
 # Voices Management
 @app.get("/api/audio/voices")
@@ -585,13 +850,16 @@ async def execute_command(req: CommandRequest):
 
 @app.post("/api/audio/wake_trigger")
 async def manual_wake_trigger():
-    """Activa la ventana de escucha activa de Banshee para hablarle de inmediato."""
+    """Activa la ventana de escucha activa de Vanshee para hablarle de inmediato."""
+    init_wake_word()
     if state.wake_detector:
-        state.wake_detector.trigger_manual_listen()
+        state.wake_detector.resume()
+        state.wake_detector.trigger_manual_listen(duration=8.0)
     tts = get_tts()
     tts.speak("¿Dime?", block=False)
+    await broadcast_ws("mic_state_changed", {"is_listening": True, "mode": "listening"})
     await broadcast_ws("wake_word_listening", {"phrase": "manual_click"})
-    return {"status": "ok", "mode": "active_listening"}
+    return {"status": "ok", "is_listening": True, "mode": "active_listening"}
 
 @app.post("/api/voice/command")
 async def voice_command(audio: UploadFile = File(...), speak_tts: bool = Form(True)):
@@ -638,86 +906,294 @@ async def voice_command(audio: UploadFile = File(...), speak_tts: bool = Form(Tr
         except Exception:
             pass
 
-@app.post("/api/audio/test_mic")
-async def test_mic(duration: float = Form(3.0), device_index: Optional[int] = Form(None)):
-    """Graba la voz del usuario durante 3 segundos, guarda el WAV para reproducción y analiza calidad y volumen."""
-    import numpy as np
-    import wave
+import numpy as np
+import wave
 
-    target_dev = device_index if device_index is not None else getattr(settings, "AUDIO_INPUT_DEVICE", None)
+class LiveMicTester:
+    def __init__(self):
+        self.is_running = False
+        self.stream = None
+        self.buffer = []
+        self.start_time = 0.0
+        self.last_rms = 0.0
+        self.max_rms = 0.0
+        self.device_index = None
+        self.was_wake_paused = False
+        self._lock = threading.Lock()
 
-    # Pausar el detector de fondo mientras se hace la prueba
-    if state.wake_detector:
-        state.wake_detector.pause()
+    def start(self, device_index=None) -> bool:
+        with self._lock:
+            if self.is_running:
+                self.stop_internal()
 
-    def _sample():
-        sr = 16000
-        samples = sd.rec(int(sr * duration), samplerate=sr, channels=1, dtype="int16", device=target_dev)
-        sd.wait()
-        rms = float(np.sqrt(np.mean(samples.astype(np.float32) ** 2)))
-        peak = float(np.max(np.abs(samples)))
+            self.buffer = []
+            self.max_rms = 0.0
+            self.last_rms = 0.0
+            self.device_index = device_index
+            self.start_time = time.time()
+            self.is_running = True
 
-        # Guardar audio en archivo estático para que el usuario pueda escucharlo inmediatamente
-        audio_dir = web_dir / "static" / "audio"
-        audio_dir.mkdir(parents=True, exist_ok=True)
-        wav_path = audio_dir / "mic_test_sample.wav"
+            # Pausar temporalmente wake_detector de fondo para evitar conflictos de hardware en Windows
+            self.was_wake_paused = False
+            if state.wake_detector:
+                self.was_wake_paused = state.wake_detector.is_user_paused
+                state.wake_detector.pause(user_initiated=False)
 
-        with wave.open(str(wav_path), "wb") as wf:
-            wf.setnchannels(1)
-            wf.setsampwidth(2)
-            wf.setframerate(sr)
-            wf.writeframes(samples.tobytes())
+            def stream_callback(indata, frames, time_info, status):
+                if not self.is_running:
+                    return
+                chunk = indata.copy()
+                self.buffer.append(chunk)
+                rms = float(np.sqrt(np.mean(chunk.astype(np.float32) ** 2)))
+                self.last_rms = rms
+                if rms > self.max_rms:
+                    self.max_rms = rms
 
-        return rms, peak
+            try:
+                self.stream = sd.InputStream(
+                    device=self.device_index,
+                    channels=1,
+                    samplerate=16000,
+                    dtype="int16",
+                    blocksize=1600,
+                    callback=stream_callback
+                )
+                self.stream.start()
+                return True
+            except Exception as e:
+                print(f"[LiveMicTester Error]: {e}")
+                self.is_running = False
+                if state.wake_detector and not self.was_wake_paused:
+                    state.wake_detector.resume(user_initiated=False)
+                return False
 
-    loop = asyncio.get_running_loop()
-    try:
-        rms, peak = await loop.run_in_executor(None, _sample)
-    except Exception as e:
-        if state.wake_detector:
-            state.wake_detector.resume()
+    def stop_internal(self):
+        self.is_running = False
+        s = self.stream
+        self.stream = None
+        if s:
+            try:
+                s.stop()
+                s.close()
+            except Exception:
+                pass
+
+    def stop(self) -> dict:
+        with self._lock:
+            if not self.is_running and not self.buffer:
+                return {
+                    "status": "ok",
+                    "action": "stopped",
+                    "is_testing": False,
+                    "duration": 0.0,
+                    "volume_rms": 0.0,
+                    "max_rms": 0.0,
+                    "quality_verdict": "Sin prueba realizada",
+                    "has_sound": False,
+                    "advice": "Presiona el botón para iniciar la prueba de detección.",
+                    "audio_url": ""
+                }
+
+            self.stop_internal()
+            dur = max(0.1, time.time() - self.start_time)
+
+            if state.wake_detector and not self.was_wake_paused:
+                state.wake_detector.resume(user_initiated=False)
+
+            if not self.buffer:
+                return {
+                    "status": "ok",
+                    "action": "stopped",
+                    "is_testing": False,
+                    "duration": round(dur, 1),
+                    "volume_rms": 0.0,
+                    "max_rms": 0.0,
+                    "quality_verdict": "No se escucha al no percibir sonido alguno",
+                    "has_sound": False,
+                    "advice": "No se recibieron datos de audio del micrófono.",
+                    "audio_url": ""
+                }
+
+            try:
+                full_audio = np.concatenate(self.buffer, axis=0)
+                avg_rms = float(np.sqrt(np.mean(full_audio.astype(np.float32) ** 2)))
+                max_rms = float(self.max_rms)
+
+                # Guardar WAV para reproducción inmediata
+                audio_dir = web_dir / "static" / "audio"
+                audio_dir.mkdir(parents=True, exist_ok=True)
+                wav_path = audio_dir / "mic_test_sample.wav"
+
+                with wave.open(str(wav_path), "wb") as wf:
+                    wf.setnchannels(1)
+                    wf.setsampwidth(2)
+                    wf.setframerate(16000)
+                    wf.writeframes(full_audio.tobytes())
+
+                audio_url = f"/static/audio/mic_test_sample.wav?t={int(time.time()*1000)}"
+            except Exception as e:
+                print(f"[LiveMicTester Save Error]: {e}")
+                avg_rms = float(self.last_rms)
+                max_rms = float(self.max_rms)
+                audio_url = ""
+
+            has_sound = max_rms >= 38.0
+            if max_rms >= 60.0:
+                quality_status = "Se escucha fuerte y claro"
+                advice = "¡Excelente! El micrófono capta tu voz de forma legítima, nítida y con volumen adecuado."
+                rec_thresh = max(55.0, round(avg_rms * 0.7, 0))
+            elif max_rms >= 38.0:
+                quality_status = "Voz moderada percibida"
+                advice = "El micrófono capta sonido pero con volumen algo bajo. Recomendamos acercarte más o subir el volumen en Windows (80-100%)."
+                rec_thresh = 45.0
+            else:
+                quality_status = "No se escucha al no percibir sonido alguno"
+                advice = "No se detectó sonido alguno. Verifica que el micrófono no tenga botón físico de silencio o esté en mute en Windows."
+                rec_thresh = 100.0
+
+            return {
+                "status": "ok",
+                "action": "stopped",
+                "is_testing": False,
+                "duration": round(dur, 1),
+                "volume_rms": round(avg_rms, 1),
+                "max_rms": round(max_rms, 1),
+                "quality_verdict": quality_status,
+                "has_sound": has_sound,
+                "advice": advice,
+                "recommended_threshold": rec_thresh,
+                "audio_url": audio_url
+            }
+
+    def get_current_meter(self) -> dict:
+        rms = self.last_rms
+        pct = min(100.0, round((rms / 240.0) * 100.0, 1))
+        if rms >= 60.0:
+            verdict = "🎙️ Se escucha fuerte y claro"
+            status_type = "clear"
+        elif rms >= 38.0:
+            verdict = "🔉 Voz moderada / Sonido captado"
+            status_type = "moderate"
+        else:
+            verdict = "🔇 No se escucha al no percibir sonido alguno"
+            status_type = "silence"
+
         return {
-            "rms": 0,
-            "peak": 0,
-            "level_percent": 0,
-            "status": f"Error en dispositivo: {e}",
-            "advice": "No se pudo acceder al micrófono seleccionado.",
-            "recommended_threshold": 100.0,
-            "audio_url": ""
+            "is_testing": self.is_running,
+            "rms": round(rms, 1),
+            "max_rms": round(self.max_rms, 1),
+            "level_percent": pct,
+            "verdict": verdict,
+            "status_type": status_type,
+            "has_sound": self.max_rms >= 38.0,
+            "is_speaking": rms >= 38.0
         }
-    finally:
-        if state.wake_detector:
-            state.wake_detector.resume()
 
-    percent = min(100.0, max(0.0, (rms / 350.0) * 100.0))
+mic_tester = LiveMicTester()
 
-    if rms < 45.0:
-        quality_status = "Volumen muy bajo / Casi inaudible"
-        advice = "El micrófono capta poco sonido. Te recomendamos acercarte más o subir el volumen del micrófono en la Configuración de Sonido de Windows (80-100%)."
-        rec_thresh = 45.0
-    elif rms < 85.0:
-        quality_status = "Volumen moderado"
-        advice = "La voz se escucha bien para comandos cercanos. Un umbral sensible de 60 - 75 RMS es adecuado."
-        rec_thresh = max(45.0, round(rms * 0.75, 0))
-    elif rms <= 260.0:
-        quality_status = "Excelente claridad y volumen"
-        advice = "La potencia y nitidez de tu voz son ideales. Banshee te entenderá de forma óptima."
-        rec_thresh = max(60.0, round(rms * 0.7, 0))
+@app.post("/api/audio/test/start")
+async def start_mic_test_endpoint(request: Request):
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    dev_idx = body.get("device_index", None)
+    if dev_idx is None:
+        dev_idx = getattr(settings, "AUDIO_INPUT_DEVICE", None)
+
+    success = await asyncio.to_thread(mic_tester.start, dev_idx)
+    if not success:
+        return {"status": "error", "message": "No se pudo acceder al micrófono seleccionado.", "is_testing": False}
+
+    async def _broadcast_tester():
+        while mic_tester.is_running:
+            if state.active_connections:
+                await broadcast_ws("mic_test_meter", mic_tester.get_current_meter())
+            await asyncio.sleep(0.08)
+
+    asyncio.create_task(_broadcast_tester())
+    await broadcast_ws("mic_test_state", {"is_testing": True})
+    return {"status": "ok", "action": "started", "is_testing": True}
+
+@app.post("/api/audio/test/stop")
+async def stop_mic_test_endpoint():
+    res = await asyncio.to_thread(mic_tester.stop)
+    await broadcast_ws("mic_test_state", {"is_testing": False, "result": res})
+    return res
+
+@app.post("/api/audio/test/toggle")
+@app.post("/api/audio/mic_record_test")
+@app.post("/api/audio/test_mic")
+async def toggle_mic_test_endpoint(request: Request):
+    """
+    Alterna la prueba de micrófono en tiempo real de forma no bloqueante:
+    - Si está activa: la detiene de inmediato, devuelve veredicto verídico y WAV.
+    - Si está inactiva: inicia la detección en vivo.
+    """
+    if mic_tester.is_running:
+        res = await asyncio.to_thread(mic_tester.stop)
+        await broadcast_ws("mic_test_state", {"is_testing": False, "result": res})
+        return res
     else:
-        quality_status = "Volumen muy alto / Posible saturación"
-        advice = "El micrófono está captando niveles muy intensos. Te recomendamos alejarte unos centímetros para evitar saturación."
-        rec_thresh = 140.0
+        body = {}
+        try:
+            body = await request.json()
+        except Exception:
+            pass
+        dev_idx = body.get("device_index", None)
+        if dev_idx is None:
+            dev_idx = getattr(settings, "AUDIO_INPUT_DEVICE", None)
+
+        success = await asyncio.to_thread(mic_tester.start, dev_idx)
+        if not success:
+            return {"status": "error", "message": "No se pudo acceder al micrófono seleccionado.", "is_testing": False}
+
+        async def _broadcast_tester():
+            while mic_tester.is_running:
+                if state.active_connections:
+                    await broadcast_ws("mic_test_meter", mic_tester.get_current_meter())
+                await asyncio.sleep(0.08)
+
+        asyncio.create_task(_broadcast_tester())
+        await broadcast_ws("mic_test_state", {"is_testing": True})
+        return {"status": "ok", "action": "started", "is_testing": True}
+
+@app.get("/api/audio/test/meter")
+async def get_test_meter_endpoint():
+    return mic_tester.get_current_meter()
+
+@app.get("/api/audio/mic_level")
+async def get_mic_level_endpoint():
+    """Devuelve el nivel RMS y veredicto real del micrófono en uso (sea en prueba o escucha continua)."""
+    rms = 0.0
+    if mic_tester.is_running:
+        return mic_tester.get_current_meter()
+    elif state.wake_detector and state.wake_detector.is_listening_active:
+        rms = getattr(state.wake_detector, "last_rms", 0.0)
+
+    pct = min(100.0, round((rms / 240.0) * 100.0, 1))
+    if rms >= 60.0:
+        verdict = "🎙️ Se escucha fuerte y claro"
+        status_type = "clear"
+    elif rms >= 38.0:
+        verdict = "🔉 Voz moderada / Sonido captado"
+        status_type = "moderate"
+    else:
+        verdict = "🔇 No se escucha al no percibir sonido alguno"
+        status_type = "silence"
 
     return {
+        "is_testing": False,
         "rms": round(rms, 1),
-        "peak": round(peak, 1),
-        "level_percent": round(percent, 1),
-        "status": quality_status,
-        "advice": advice,
-        "recommended_threshold": rec_thresh,
-        "audio_url": f"/static/audio/mic_test_sample.wav?t={int(time.time()*1000)}"
+        "level_percent": pct,
+        "verdict": verdict,
+        "status_type": status_type,
+        "has_sound": rms >= 38.0,
+        "is_listening": state.wake_detector.is_listening_active if state.wake_detector else True
     }
 
+@app.post("/api/settings")
 @app.post("/api/settings/update")
 async def update_settings(req: SettingsUpdateRequest):
     state.speak_tts_enabled = req.speak_tts
@@ -952,6 +1428,15 @@ def _resolve_web_dir() -> Path:
         for sub in [exe_dir / "src" / "web", exe_dir / "_internal" / "src" / "web", exe_dir / "web"]:
             if sub.exists():
                 return sub
+    cand = Path(__file__).resolve().parent / "web"
+    if cand.exists():
+        return cand
+    cand = ROOT_DIR / "src" / "web"
+    if cand.exists():
+        return cand
+    cand = Path.cwd() / "src" / "web"
+    if cand.exists():
+        return cand
     return Path(__file__).resolve().parent / "web"
 
 web_dir = _resolve_web_dir()
@@ -987,6 +1472,7 @@ async def serve_launcher():
 
 @app.on_event("startup")
 async def on_startup():
+    state.main_loop = asyncio.get_running_loop()
     # Iniciar detector de Wake Word y modelo STT en un hilo en segundo plano
     # para que el servidor HTTP y la interfaz inicien de forma inmediata e interactiva (< 0.5s).
     import threading

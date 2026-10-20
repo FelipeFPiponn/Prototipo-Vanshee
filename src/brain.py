@@ -1,10 +1,12 @@
+import re
+import time
 from dataclasses import dataclass
 
 from src.audio.tts_engine import TTSEngine
 from src.context_awareness import ContextAwarenessEngine, ContextSnapshot
 from src.executor.os_executor import OSExecutor
 from src.memory_store import MemoryStore
-from src.nlu.intent_parser import IntentParser, ParsedPipeline
+from src.nlu.intent_parser import IntentParser, ParsedPipeline, ActionStep, StepParameters
 from src.semantic_memory import SemanticMemory
 
 
@@ -17,7 +19,7 @@ class BrainResult:
 
 
 class VansheeBrain:
-    """Coordinador central: percepción, memoria, razonamiento, acción y aprendizaje."""
+    """Coordinador central: percepción, memoria, razonamiento, acción y ejecución."""
 
     def __init__(
         self,
@@ -55,14 +57,49 @@ class VansheeBrain:
                 self.tts.speak(response)
             return self._finish(clean_text, context, None, response, False)
 
+        lowered = clean_text.lower().strip()
+        norm = (
+            lowered.strip("¿?¡!.,;: \t")
+            .replace("á", "a")
+            .replace("é", "e")
+            .replace("í", "i")
+            .replace("ó", "o")
+            .replace("ú", "u")
+        )
+
+        polite_terms = {
+            "gracias", "muchas gracias", "ok", "vale", "perfecto", "genial",
+            "excelente", "bueno", "bien", "listo", "de acuerdo", "entendido", "si"
+        }
+        if norm in polite_terms:
+            response = "¡A tu servicio!" if "gracias" in norm else "¡Perfecto!"
+            if self.speak_tts:
+                self.tts.speak(response)
+            return self._finish(clean_text, context, None, response, True)
+
         self._learn_obvious_preferences(clean_text, context)
         semantic_context = self.semantic_memory.summarize_matches(clean_text)
         print(f"[Brain] Memoria semántica relevante: {semantic_context}")
+
+        # 1. Comandos aprendidos previamente en base de datos
+        learned_target = self.executor.resolver.get_learned_command(clean_text)
+        if learned_target:
+            pipeline = ParsedPipeline(
+                raw_text=clean_text,
+                steps=[ActionStep(intent="OPEN_APP", target=learned_target, parameters=StepParameters())]
+            )
+            success = self.executor.execute_pipeline(pipeline)
+            response = getattr(self.executor, "last_action_message", "") or f"Ejecutando '{learned_target}' que aprendí anteriormente."
+            if self.speak_tts:
+                self.tts.speak(response)
+            return self._finish(clean_text, context, pipeline, response, success)
+
+        # 2. Parsear con el motor NLU
         pipeline = self.parser.parse(clean_text)
         plan_summary = self._summarize_plan(pipeline)
         print(f"[Brain] Plan: {plan_summary}")
 
-        if not pipeline.steps:
+        if not pipeline.steps or any(s.intent == "UNKNOWN" for s in pipeline.steps):
             response = self._fallback_response(context)
             if self.speak_tts:
                 self.tts.speak(response)

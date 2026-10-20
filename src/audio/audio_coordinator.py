@@ -18,7 +18,7 @@ def notify_tts_start():
     _is_speaking = True
     if _active_wake_detector:
         try:
-            _active_wake_detector.pause()
+            _active_wake_detector.pause(user_initiated=False)
         except Exception:
             pass
 
@@ -28,7 +28,7 @@ def notify_tts_end():
     _is_speaking = False
     if _active_wake_detector:
         try:
-            _active_wake_detector.resume()
+            _active_wake_detector.resume(user_initiated=False)
         except Exception:
             pass
 

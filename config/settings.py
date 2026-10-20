@@ -1,5 +1,6 @@
 import os
 import sys
+from typing import Any
 from pathlib import Path
 from pydantic_settings import BaseSettings
 
@@ -11,7 +12,7 @@ class Settings(BaseSettings):
     
     # Audio & Wake-Word
     WAKE_WORD: str = "v_anshee"
-    STT_MODEL_SIZE: str = "medium"  # whisper local model size (small, medium)
+    STT_MODEL_SIZE: str = "small"  # whisper local model size (small, medium)
     
     # NLU / LLM Config
     LLM_PROVIDER: str = "ollama"  # "ollama" o "openai"
@@ -36,7 +37,7 @@ class Settings(BaseSettings):
     WEB_HOST: str = "127.0.0.1"
     WEB_PORT: int = 8000
     ENABLE_VOICE_VERIFICATION: bool = False
-    AUDIO_THRESHOLD_RMS: float = 100.0
+    AUDIO_THRESHOLD_RMS: float = 45.0
     AUDIO_INPUT_DEVICE: int | None = None
     AUDIO_DEVICE_NAME: str = ""
     TTS_VOICE: str = "es-ES-ElviraNeural"
@@ -45,6 +46,24 @@ class Settings(BaseSettings):
     AUTOSTART_ENABLED: bool = False
 
     class Config:
-        env_file = ".env"
+        env_file = str(BASE_DIR / ".env")
 
-settings = Settings()
+settings = Settings()
+
+def save_setting(key: str, value: Any):
+    """Guarda una variable de configuración en memoria y la persiste de forma segura en .env."""
+    import re
+    if not re.match(r"^[A-Za-z0-9_]+$", str(key)):
+        raise ValueError(f"Clave de configuración inválida: '{key}'")
+
+    setattr(settings, key, value)
+    env_path = BASE_DIR / ".env"
+    if not env_path.exists():
+        env_path.touch()
+
+    try:
+        import dotenv
+        val_str = str(value).replace("\r", "").replace("\n", "")
+        dotenv.set_key(str(env_path), key, val_str, quote_mode="always")
+    except Exception as e:
+        print(f"[Settings] Error guardando {key} en {env_path}: {e}")

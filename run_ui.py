@@ -23,37 +23,34 @@ if str(ROOT) not in sys.path:
 # En ejecutables de Windows sin consola (--noconsole), sys.stdout y sys.stderr son None.
 # Uvicorn y sus formateadores de log crashean al intentar sys.stdout.isatty().
 class SafeStream:
-    def __init__(self, log_path: Path):
+    def __init__(self, log_path: Path, original=None):
         self.log_path = log_path
+        self.original = original
     def write(self, data):
         if not data:
             return
+        try:
+            if self.original and hasattr(self.original, "write"):
+                self.original.write(data)
+        except Exception:
+            pass
         try:
             with open(self.log_path, "a", encoding="utf-8", errors="replace") as f:
                 f.write(data)
         except Exception:
             pass
     def flush(self):
-        pass
+        try:
+            if self.original and hasattr(self.original, "flush"):
+                self.original.flush()
+        except Exception:
+            pass
     def isatty(self):
         return False
 
 log_file = ROOT / "vanshee_app.log"
-if sys.stdout is None:
-    sys.stdout = SafeStream(log_file)
-elif sys.platform == "win32":
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-
-if sys.stderr is None:
-    sys.stderr = SafeStream(log_file)
-elif sys.platform == "win32":
-    try:
-        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
+sys.stdout = SafeStream(log_file, original=sys.stdout)
+sys.stderr = SafeStream(log_file, original=sys.stderr)
 
 if sys.stdin is None:
     sys.stdin = io.StringIO()
@@ -74,9 +71,9 @@ def get_ollama_executable() -> Optional[str]:
     # 2. Rutas estándar de instalación en Windows
     candidates = [
         os.path.expandvars(r"%LOCALAPPDATA%\Programs\Ollama\ollama.exe"),
+        os.path.expandvars(r"%USERPROFILE%\AppData\Local\Programs\Ollama\ollama.exe"),
         os.path.expandvars(r"%ProgramFiles%\Ollama\ollama.exe"),
         os.path.expandvars(r"%ProgramFiles(x86)%\Ollama\ollama.exe"),
-        r"C:\Users\Entoma\AppData\Local\Programs\Ollama\ollama.exe",
     ]
     for c in candidates:
         if os.path.exists(c):
@@ -135,23 +132,35 @@ def wait_for_server(url: str, timeout: float = 30.0) -> bool:
     return False
 
 def get_primary_work_area():
-    """Retorna las coordenadas del área de trabajo (restando la barra de tareas de Windows)."""
+    """Retorna las coordenadas del área de trabajo disponible (restando la barra de tareas de Windows)."""
+    try:
+        import ctypes
+        class RECT(ctypes.Structure):
+            _fields_ = [('left', ctypes.c_long), ('top', ctypes.c_long), ('right', ctypes.c_long), ('bottom', ctypes.c_long)]
+        r = RECT()
+        # SPI_GETWORKAREA = 0x0030
+        if ctypes.windll.user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(r), 0):
+            return int(r.left), int(r.top), int(r.right), int(r.bottom)
+    except Exception:
+        pass
     try:
         import win32api
         import win32con
         hmon = win32api.MonitorFromPoint((0, 0), win32con.MONITOR_DEFAULTTOPRIMARY)
         info = win32api.GetMonitorInfo(hmon)
-        work = info.get("work", (0, 0, 1920, 1040))
-        return work[0], work[1], work[2], work[3]
+        work = info.get("work")
+        if work:
+            return work[0], work[1], work[2], work[3]
     except Exception:
-        try:
-            import ctypes
-            user32 = ctypes.windll.user32
-            sw = user32.GetSystemMetrics(0)
-            sh = user32.GetSystemMetrics(1)
-            return 0, 0, sw, max(600, sh - 48)
-        except Exception:
-            return 0, 0, 1920, 1040
+        pass
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        sw = user32.GetSystemMetrics(0)
+        sh = user32.GetSystemMetrics(1)
+        return 0, 0, sw, max(400, sh - 48)
+    except Exception:
+        return 0, 0, 1366, 720
 
 def launch_desktop_gui(url: str) -> bool:
     """Abre la arquitectura coordinada: Burbuja flotante circular nativa (Tkinter) + Panel de Chat (pywebview 420x720)."""
@@ -162,14 +171,15 @@ def launch_desktop_gui(url: str) -> bool:
 
         wx, wy, wr, wb = get_primary_work_area()
 
-        # 1. Iniciar la Burbuja Flotante Circular Nativa (100% transparente) en un hilo daemon
+        # 1. Iniciar la Burbuja Flotante Circular Nativa (oculta inicialmente mientras el chat esté abierto)
         bubble = FloatingLauncherBubble(api_url=url)
+        window_bridge.launcher_window = bubble
         bubble_thread = threading.Thread(target=bubble.start, daemon=True, name="LauncherBubbleThread")
         bubble_thread.start()
 
-        # 2. Ventana de Chat Principal (420x720)
+        # 2. Ventana de Chat Principal adaptable a la pantalla
         cw = 420
-        ch = min(720, max(500, wb - wy - 40))
+        ch = min(720, max(480, wb - wy - 40))
         cx = max(wx, wr - cw - 20)
         cy = max(wy, wb - ch - 20)
 
@@ -180,9 +190,9 @@ def launch_desktop_gui(url: str) -> bool:
             height=ch,
             x=cx,
             y=cy,
-            frameless=True,       # 100% Sin barra de título de Windows
-            on_top=True,          # Superpuesto siempre a otras ventanas
-            easy_drag=False,
+            frameless=True,       # Sin barra de título estándar del SO (arrastre por cabecera y easy_drag)
+            on_top=True,          # Superpuesto inicialmente a otras ventanas
+            easy_drag=True,       # Habilita arrastrar la ventana a cualquier parte de la pantalla
             background_color='#0d111a'
         )
 
@@ -200,10 +210,6 @@ def launch_desktop_gui(url: str) -> bool:
         print(f"[V.ANSHEE UI Warning] No se pudo iniciar con pywebview ({e}). Usando modo navegador...")
         open_app_window(url)
         return False
-    except Exception as e:
-        print(f"[V.ANSHEE UI Warning] No se pudo iniciar con pywebview ({e}). Usando modo navegador...")
-        open_app_window(url)
-        return False
 
 def open_app_window(url: str):
     """Abre la consola como una aplicación de escritorio nativa usando Edge o Chrome en modo App."""
@@ -213,6 +219,24 @@ def open_app_window(url: str):
     else:
         print(f"[V.ANSHEE UI] Servidor verificado y respondiendo en {url}.")
 
+    from src.server import window_bridge
+    from src.ui.floating_launcher import FloatingLauncherBubble
+    if window_bridge.launcher_window is None:
+        try:
+            bubble = FloatingLauncherBubble(api_url=url)
+            window_bridge.launcher_window = bubble
+            bubble_thread = threading.Thread(target=bubble.start, daemon=True, name="LauncherBubbleThread")
+            bubble_thread.start()
+        except Exception as e:
+            print(f"[V.ANSHEE UI Warning] No se pudo iniciar burbuja flotante: {e}")
+
+    # Dimensiones y posicionamiento dinámicos adaptados a la pantalla del equipo
+    wx, wy, wr, wb = get_primary_work_area()
+    cw = 430
+    ch = min(730, max(480, wb - wy - 40))
+    cx = max(wx, wr - cw - 20)
+    cy = max(wy, wb - ch - 20)
+
     # Directorio de perfil aislado para la app de escritorio de Vanshee
     profile_dir = os.path.expandvars(r"%LOCALAPPDATA%\Vanshee\UIProfile")
     try:
@@ -220,11 +244,10 @@ def open_app_window(url: str):
     except Exception:
         pass
 
-    # Dimensiones, posicionamiento y aislamiento de chatbot widget flotante
     chatbot_args = [
         f"--user-data-dir={profile_dir}",
-        "--window-size=430,730",
-        "--window-position=1460,260",
+        f"--window-size={cw},{ch}",
+        f"--window-position={cx},{cy}",
         "--disable-http-cache",
         "--disk-cache-size=1",
         "--media-cache-size=1",

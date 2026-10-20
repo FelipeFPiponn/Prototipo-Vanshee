@@ -55,8 +55,13 @@ class WhisperSTT:
             self.model = WhisperModel(size, device=device, compute_type=compute_type)
             self.current_model = size
             self.current_device = device
+            
+            # Verificación preventiva de inferencia CUDA para detectar DLLs faltantes de inmediato
+            if device == "cuda":
+                dummy_audio = np.zeros(1600, dtype=np.float32)
+                _ = list(self.model.transcribe(dummy_audio, language="es")[0])
         except Exception as e:
-            print(f"[STT Warning] Fallo al iniciar en {device.upper()}: {e}. Cambiando a CPU (int8)...")
+            print(f"[STT Warning] Fallo o DLLs faltantes en {device.upper()}: {e}. Conmutando permanentemente a CPU (int8)...")
             device = "cpu"
             compute_type = "int8"
             self.model = WhisperModel(size, device=device, compute_type=compute_type)
@@ -67,13 +72,24 @@ class WhisperSTT:
         """Transcribe audio desde una ruta de archivo .wav o directamente desde un array numpy en memoria RAM."""
         # 1. Normalización de entrada y verificación de duración
         audio_data = None
-        prompt = "Banshee, asistente de voz para Windows. Comandos: abrir, cerrar, buscar, ejecutar, YouTube, Brave, Chrome, VS Code."
+        prompt = None
 
         if isinstance(audio_input, np.ndarray):
-            if audio_input.dtype == np.int16:
-                audio_data = audio_input.astype(np.float32) / 32768.0
+            # Garantizar array 1D unidimensional estricto para Silero VAD y Faster-Whisper
+            flat_audio = audio_input
+            if flat_audio.ndim > 1:
+                if flat_audio.shape[1] > 1:
+                    flat_audio = np.mean(flat_audio, axis=1)
+                else:
+                    flat_audio = flat_audio.squeeze(-1)
+            flat_audio = flat_audio.flatten()
+
+            if flat_audio.dtype == np.int16:
+                audio_data = flat_audio.astype(np.float32) / 32768.0
             else:
-                audio_data = audio_input.astype(np.float32)
+                audio_data = flat_audio.astype(np.float32)
+
+            audio_data = np.ascontiguousarray(audio_data)
 
             duration = len(audio_data) / 16000.0
             if duration < 0.25:
@@ -136,7 +152,7 @@ class WhisperSTT:
             print(f"[STT Transcribe Error]: {e}")
             return ""
 
-        # 3. Filtrar alucinaciones comunes
+        # 3. Filtrar alucinaciones comunes y frases fantasma
         hallucination_phrases = {
             "subtítulos realizados por",
             "comunidad de amara.org",
@@ -144,10 +160,16 @@ class WhisperSTT:
             "gracias por ver",
             "suscríbete al canal",
             "muchas gracias por su atención",
+            "asistente de voz",
+            "comando de voz",
+            "asistente para windows",
+            "asistente de windows",
+            "comando de windows",
+            "asistente de voz para windows",
         }
         lowered = text.lower().strip()
         for phrase in hallucination_phrases:
-            if phrase in lowered and len(text) < 45:
+            if phrase in lowered:
                 return ""
 
         return text
