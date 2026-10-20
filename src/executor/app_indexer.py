@@ -61,6 +61,69 @@ class AppIndexer:
         for alias, uri in self.steam_indexer.alias_map.items():
             if alias not in self.app_index:
                 self.app_index[alias] = uri
+
+        # 3. Aplicaciones y utilidades nativas de Windows
+        system_apps = {
+            "bloc de notas": "notepad.exe",
+            "notepad": "notepad.exe",
+            "calculadora": "calc.exe",
+            "calculator": "calc.exe",
+            "explorador": "explorer.exe",
+            "explorador de archivos": "explorer.exe",
+            "archivos": "explorer.exe",
+            "administrador de tareas": "taskmgr.exe",
+            "task manager": "taskmgr.exe",
+            "panel de control": "control.exe",
+            "configuracion": "ms-settings:",
+            "ajustes": "ms-settings:",
+            "paint": "mspaint.exe",
+            "recortes": "snippingtool.exe",
+            "cmd": "cmd.exe",
+            "simbolo del sistema": "cmd.exe",
+            "terminal": "wt.exe",
+            "powershell": "powershell.exe",
+        }
+        for name, cmd in system_apps.items():
+            if name not in self.app_index:
+                self.app_index[name] = cmd
+
+        # 4. Comprobación directa de ejecutables conocidos
+        common_candidates = {
+            "discord": [
+                os.path.expandvars(r"%LocalAppData%\Discord\Update.exe --processStart Discord.exe"),
+            ],
+            "opera gx": [
+                os.path.expandvars(r"%LocalAppData%\Programs\Opera GX\launcher.exe"),
+            ],
+            "chrome": [
+                os.path.expandvars(r"%ProgramFiles%\Google\Chrome\Application\chrome.exe"),
+                os.path.expandvars(r"%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe"),
+                os.path.expandvars(r"%LocalAppData%\Google\Chrome\Application\chrome.exe"),
+            ],
+            "brave": [
+                os.path.expandvars(r"%ProgramFiles%\BraveSoftware\Brave-Browser\Application\brave.exe"),
+                os.path.expandvars(r"%LocalAppData%\BraveSoftware\Brave-Browser\Application\brave.exe"),
+            ],
+            "edge": [
+                os.path.expandvars(r"%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe"),
+                os.path.expandvars(r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"),
+            ],
+            "spotify": [
+                os.path.expandvars(r"%APPDATA%\Spotify\Spotify.exe")
+            ],
+            "vscode": [
+                os.path.expandvars(r"%LocalAppData%\Programs\Microsoft VS Code\Code.exe"),
+                os.path.expandvars(r"%ProgramFiles%\Microsoft VS Code\Code.exe"),
+            ]
+        }
+        for app_name, paths in common_candidates.items():
+            if app_name not in self.app_index:
+                for p in paths:
+                    expanded = os.path.expandvars(p)
+                    base_exe = expanded.split(" --")[0]
+                    if os.path.exists(base_exe):
+                        self.app_index[app_name] = expanded
+                        break
         
         print(f"[AppIndexer] Se indexaron {len(self.app_index)} aplicaciones y juegos del equipo.")
 
@@ -70,6 +133,15 @@ class AppIndexer:
         if not target:
             return None
 
+        def _resolve_browser():
+            if any("opera" in k for k in self.app_index):
+                return "opera gx"
+            if "chrome" in self.app_index:
+                return "chrome"
+            if "brave" in self.app_index:
+                return "brave"
+            return "edge"
+
         alias_map = {
             "vscode": "visual studio code",
             "vs code": "visual studio code",
@@ -78,10 +150,15 @@ class AppIndexer:
             "antigravity": "antigravity ide",
             "codex": "visual studio code",
             "opencode": "visual studio code",
-            "navegador": "chrome",
-            "browser": "chrome",
-            "terminal": "windows terminal",
-            "cmd": "símbolo del sistema",
+            "navegador": _resolve_browser(),
+            "browser": _resolve_browser(),
+            "terminal": "terminal",
+            "cmd": "cmd",
+            "notepad": "bloc de notas",
+            "calc": "calculadora",
+            "calculator": "calculadora",
+            "archivos": "explorador de archivos",
+            "taskmgr": "administrador de tareas",
         }
         search_target = alias_map.get(target, target)
 

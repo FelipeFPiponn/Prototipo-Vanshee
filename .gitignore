@@ -26,3 +26,12 @@ Thumbs.db
 Desktop.ini
 *.tmp
 *.log
+
+# Local Database
+*.db
+vanshee.db
+data/vanshee.db
+
+# Executables & temporary dumps
+Vanshee.exe
+dist/*.txt

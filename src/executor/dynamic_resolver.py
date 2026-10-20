@@ -121,12 +121,20 @@ class DynamicResolver:
         if not local_path and clean_name != target_clean:
             local_path = self.indexer.find_app(clean_name)
 
+        # Fallback para navegadores si 'chrome' o 'navegador' no está instalado como tal
+        if not local_path and target_clean in ["chrome", "google chrome", "navegador", "browser"]:
+            local_path = (self.indexer.find_app("brave") or 
+                          self.indexer.find_app("edge") or 
+                          self.indexer.find_app("microsoft edge") or 
+                          self.indexer.find_app("msedge"))
+
         if local_path:
             if local_path.startswith("steam://") or "://" in local_path and not local_path.startswith("http"):
                 return local_path, "protocol"
             if local_path.startswith("http://") or local_path.startswith("https://"):
                 return local_path, "url"
             return local_path, "app"
+
 
         # 2. Buscar en comandos aprendidos previamente en DB
         learned = self.get_learned_command(target_clean) or self.get_learned_command(clean_name)

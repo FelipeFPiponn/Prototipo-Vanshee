@@ -23,37 +23,34 @@ if str(ROOT) not in sys.path:
 # En ejecutables de Windows sin consola (--noconsole), sys.stdout y sys.stderr son None.
 # Uvicorn y sus formateadores de log crashean al intentar sys.stdout.isatty().
 class SafeStream:
-    def __init__(self, log_path: Path):
+    def __init__(self, log_path: Path, original=None):
         self.log_path = log_path
+        self.original = original
     def write(self, data):
         if not data:
             return
+        try:
+            if self.original and hasattr(self.original, "write"):
+                self.original.write(data)
+        except Exception:
+            pass
         try:
             with open(self.log_path, "a", encoding="utf-8", errors="replace") as f:
                 f.write(data)
         except Exception:
             pass
     def flush(self):
-        pass
+        try:
+            if self.original and hasattr(self.original, "flush"):
+                self.original.flush()
+        except Exception:
+            pass
     def isatty(self):
         return False
 
 log_file = ROOT / "vanshee_app.log"
-if sys.stdout is None:
-    sys.stdout = SafeStream(log_file)
-elif sys.platform == "win32":
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-
-if sys.stderr is None:
-    sys.stderr = SafeStream(log_file)
-elif sys.platform == "win32":
-    try:
-        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
+sys.stdout = SafeStream(log_file, original=sys.stdout)
+sys.stderr = SafeStream(log_file, original=sys.stderr)
 
 if sys.stdin is None:
     sys.stdin = io.StringIO()
@@ -162,8 +159,9 @@ def launch_desktop_gui(url: str) -> bool:
 
         wx, wy, wr, wb = get_primary_work_area()
 
-        # 1. Iniciar la Burbuja Flotante Circular Nativa (100% transparente) en un hilo daemon
+        # 1. Iniciar la Burbuja Flotante Circular Nativa (oculta inicialmente mientras el chat esté abierto)
         bubble = FloatingLauncherBubble(api_url=url)
+        window_bridge.launcher_window = bubble
         bubble_thread = threading.Thread(target=bubble.start, daemon=True, name="LauncherBubbleThread")
         bubble_thread.start()
 
@@ -180,9 +178,9 @@ def launch_desktop_gui(url: str) -> bool:
             height=ch,
             x=cx,
             y=cy,
-            frameless=True,       # 100% Sin barra de título de Windows
-            on_top=True,          # Superpuesto siempre a otras ventanas
-            easy_drag=False,
+            frameless=True,       # Sin barra de título estándar del SO (arrastre por cabecera y easy_drag)
+            on_top=True,          # Superpuesto inicialmente a otras ventanas
+            easy_drag=True,       # Habilita arrastrar la ventana a cualquier parte de la pantalla
             background_color='#0d111a'
         )
 
@@ -196,10 +194,6 @@ def launch_desktop_gui(url: str) -> bool:
         import os
         os._exit(0)
         return True
-    except Exception as e:
-        print(f"[V.ANSHEE UI Warning] No se pudo iniciar con pywebview ({e}). Usando modo navegador...")
-        open_app_window(url)
-        return False
     except Exception as e:
         print(f"[V.ANSHEE UI Warning] No se pudo iniciar con pywebview ({e}). Usando modo navegador...")
         open_app_window(url)

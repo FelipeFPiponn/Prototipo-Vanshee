@@ -13,24 +13,29 @@
   <!-- CHATBOT MAIN WIDGET CARD -->
   <div id="chatbotContainer" class="chatbot-container">
     
-    <!-- CHATBOT HEADER (Estilo Fin / Intercom) -->
-    <header class="chat-header">
-      <div class="header-left">
+    <!-- CHATBOT HEADER (Estilo Fin / Intercom con Arrastre) -->
+    <header class="chat-header pywebview-drag-region" title="Mantén presionado para arrastrar la ventana a cualquier lado">
+      <!-- Indicador visual superior de arrastre -->
+      <div class="drag-handle-indicator pywebview-drag-region" title="Arrastrar ventana">
+        <span class="drag-pill pywebview-drag-region"></span>
+      </div>
+
+      <div class="header-left pywebview-drag-region">
         <button id="btnCollapseChat" class="header-action-btn" title="Minimizar al icono flotante">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
             <polyline points="6 9 12 15 18 9"></polyline>
           </svg>
         </button>
-        <div class="bot-avatar-wrap">
-          <div class="bot-avatar-icon">⚡</div>
+        <div class="bot-avatar-wrap pywebview-drag-region">
+          <div class="bot-avatar-icon pywebview-drag-region">⚡</div>
           <span class="bot-online-dot"></span>
         </div>
-        <div class="bot-info">
-          <div class="bot-title-row">
-            <h1 class="bot-name">Vanshee</h1>
+        <div class="bot-info pywebview-drag-region">
+          <div class="bot-title-row pywebview-drag-region">
+            <h1 class="bot-name pywebview-drag-region">Vanshee</h1>
             <span class="bot-tag">AI Agent</span>
           </div>
-          <p id="wakeStatusText" class="bot-status-desc">● Escuchando tu voz</p>
+          <p id="wakeStatusText" class="bot-status-desc pywebview-drag-region">● Escuchando tu voz</p>
         </div>
       </div>
 
@@ -139,8 +144,8 @@
             <button id="btnToggleChips" class="tool-btn" title="Mostrar u ocultar sugerencias de comandos">
               <span>⚡</span>
             </button>
-            <button id="btnVoiceToggle" class="tool-btn mic-trigger-btn" title="Hablar con Vanshee (o di 'Vanshee')">
-              <span class="mic-icon">🎙️</span>
+            <button id="btnVoiceToggle" class="tool-btn mic-trigger-btn listening" title="Micrófono activo (escuchando) · Clic para pausar">
+              <span class="mic-icon" id="micBtnIcon">🎙️</span>
             </button>
           </div>
           
@@ -177,21 +182,31 @@
         <p class="drawer-desc">Selecciona tu micrófono y realiza una prueba de 3 segundos para escuchar la claridad de tu voz.</p>
         
         <div class="form-group">
-          <label for="micSelect">Micrófono en uso:</label>
+          <div class="drawer-label-row">
+            <label for="micSelect">Micrófono en uso:</label>
+            <button id="btnRefreshMics" class="btn-refresh-mics" type="button" title="Detectar micrófonos recién conectados">
+              <span class="refresh-icon">🔄</span> Actualizar
+            </button>
+          </div>
           <select id="micSelect" class="drawer-select">
             <option value="">Detectando micrófonos...</option>
           </select>
         </div>
 
-        <button id="btnTestMic" class="btn-drawer-action" style="margin-top: 10px;">
-          🎙️ Iniciar Prueba de Grabación (3s)
+        <button id="btnTestMic" class="btn-drawer-action mic-test-btn" type="button" style="margin-top: 10px;">
+          <span class="test-mic-icon">🎙️</span> <span id="btnTestMicText">Probar Detección de Micrófono</span>
         </button>
+
+        <!-- Indicador de Veredicto en Vivo -->
+        <div id="micLiveVerdictBadge" class="live-verdict-badge silence" style="display: none; margin-top: 8px;">
+          🔇 No se percibe sonido alguno (Habla al micrófono...)
+        </div>
 
         <div class="mic-test-row" style="margin-top: 10px;">
           <div class="meter-track">
             <div id="micMeterFill" class="meter-fill"></div>
           </div>
-          <span id="micMeterText" class="mic-meter-text">Sin prueba</span>
+          <span id="micMeterText" class="mic-meter-text">Sin prueba activa</span>
         </div>
 
         <div id="micPlaybackWrap" class="mic-playback-wrap" style="display: none; margin-top: 12px;">
@@ -210,9 +225,9 @@
         <div class="form-group" style="margin-top: 16px;">
           <div style="display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px;">
             <span>Sensibilidad (Umbral RMS):</span>
-            <strong id="thresholdDisplay" style="color: var(--primary);">100 RMS</strong>
+            <strong id="thresholdDisplay" style="color: var(--primary);">45 RMS</strong>
           </div>
-          <input type="range" id="thresholdSlider" class="drawer-slider" min="30" max="300" step="5" value="100">
+          <input type="range" id="thresholdSlider" class="drawer-slider" min="20" max="200" step="5" value="45">
         </div>
       </div>
 
@@ -300,8 +315,23 @@
     </div>
   </div>
 
+  <!-- Floating Live Mic Test Pill (Visible al realizar prueba) -->
+  <div id="floatingMicTestPill" class="floating-mic-test-pill" style="display: none;">
+    <div id="floatingPillDot" class="pill-pulse-dot silence"></div>
+    <div class="pill-info">
+      <span class="pill-title">Detección de Micrófono</span>
+      <span id="floatingPillVerdict" class="pill-verdict">Iniciando...</span>
+    </div>
+    <div class="pill-mini-meter">
+      <div id="floatingPillMeterFill" class="pill-meter-fill"></div>
+    </div>
+    <button id="btnFloatingPauseTest" class="pill-pause-btn" type="button" title="Pausar o detener prueba de micrófono">
+      ⏸️ Pausar
+    </button>
+  </div>
+
   <div id="toastBox" class="toast-box" style="display: none;"></div>
 
-  <script src="/static/js/app.js?v=2.5.2"></script>
+  <script src="/static/js/app.js?v=2.5.3"></script>
 </body>
 </html>

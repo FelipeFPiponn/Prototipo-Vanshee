@@ -139,6 +139,14 @@ class OSExecutor:
             self._speak(msg)
             return success
 
+        # Cierre de aplicaciones y ventanas
+        elif "CLOSE" in intent or intent in ["CLOSE_APP", "QUIT_APP", "TERMINATE_APP"]:
+            success, msg = self.window_manager.close_app(target)
+            self.last_action_message = msg
+            print(f"[OSExecutor Cerrar App] {msg}")
+            self._speak(msg)
+            return success
+
         elif "WINDOW" in intent or "SNAP" in intent or intent in ["WINDOW_CONTROL", "SNAP_WINDOW", "POSITION_WINDOW"]:
             target_pos = step.parameters.position or step.parameters.content
             target_app = target
@@ -147,6 +155,18 @@ class OSExecutor:
             if not target_pos and self.window_manager._normalize_position(target_app):
                 target_pos = target_app
                 target_app = "active"
+
+            # Chequear si es una acción de cerrar ventana o app
+            norm_pos = self.window_manager._normalize_position(target_pos)
+            if norm_pos == "close" or target_pos in ["close", "cerrar"] or target_app in ["close", "cerrar"]:
+                if target_app in ["active", "activa", "actual", "esta", "esta ventana", "la ventana", "la ventana actual", "ventana actual", "esto", "close", "cerrar", ""]:
+                    success, msg = self.window_manager.close_active_window()
+                else:
+                    success, msg = self.window_manager.close_app(target_app)
+                self.last_action_message = msg
+                print(f"[OSExecutor Cerrar Ventana] {msg}")
+                self._speak(msg)
+                return success
 
             # Chequear si es una acción de ordenar / organizar ventanas (mosaico o división automática)
             if target_app in ["tile", "organize", "order", "ordena", "organiza"] or target_pos in ["tile", "organize", "mosaico"]:

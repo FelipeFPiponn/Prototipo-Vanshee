@@ -78,49 +78,73 @@ html, body.chatbot-body {
 }
 
 /* ==========================================================================
-   3. CHATBOT HEADER (Estilo Fin / Intercom con Arrastre Nativo)
+   3. CHATBOT HEADER (Arrastre Fluido con .pywebview-drag-region)
    ========================================================================== */
 
 .chat-header {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 18px;
-  background: rgba(19, 25, 38, 0.92);
+  padding: 16px 18px 12px 18px;
+  background: rgba(19, 25, 38, 0.96);
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   flex-shrink: 0;
   z-index: 10;
-  -webkit-app-region: drag;
+  cursor: grab;
+  user-select: none;
+}
+
+.chat-header:active,
+.pywebview-drag-region:active {
+  cursor: grabbing;
+}
+
+.pywebview-drag-region {
   cursor: grab;
 }
 
-.chat-header:active {
-  cursor: grabbing;
+/* Indicador visual de arrastre superior */
+.drag-handle-indicator {
+  position: absolute;
+  top: 4px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 80px;
+  height: 8px;
+  cursor: grab;
+  z-index: 15;
+}
+
+.drag-pill {
+  width: 38px;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.22);
+  border-radius: 4px;
+  transition: all 0.2s ease;
+}
+
+.chat-header:hover .drag-pill {
+  background: var(--primary);
+  box-shadow: 0 0 8px var(--primary-glow);
+  width: 48px;
 }
 
 .header-left {
   display: flex;
   align-items: center;
   gap: 10px;
-  -webkit-app-region: drag;
+  cursor: grab;
 }
 
-.header-actions,
-.header-action-btn,
-.chat-body,
-.chat-footer,
-.tool-btn,
-.send-msg-btn,
-.chat-textarea,
-.slide-drawer,
-.drawer-close-btn,
-.quick-chips-tray,
-.chip-item,
-button,
-input,
-select,
-textarea {
-  -webkit-app-region: no-drag;
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: default;
 }
 
 .header-action-btn {
@@ -133,11 +157,13 @@ textarea {
   display: flex;
   align-items: center;
   justify-content: center;
-  cursor: pointer;
+  cursor: pointer !important;
   transition: all 0.2s ease;
+  user-select: none;
 }
 
 .header-action-btn:hover {
+
   background: rgba(255, 255, 255, 0.12);
   color: var(--text-primary);
   border-color: rgba(255, 255, 255, 0.2);
@@ -521,7 +547,10 @@ textarea {
   resize: none;
   max-height: 80px;
   line-height: 1.4;
+  user-select: text !important;
+  cursor: text;
 }
+
 
 .chat-textarea::placeholder {
   color: var(--text-muted);
@@ -561,10 +590,36 @@ textarea {
   color: var(--text-primary);
 }
 
+.mic-trigger-btn {
+  position: relative;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
 .mic-trigger-btn.listening {
-  color: #fb7185;
-  background: rgba(244, 63, 94, 0.2);
-  animation: pulse-border 1.2s infinite;
+  color: #38bdf8;
+  background: rgba(14, 165, 233, 0.2);
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  box-shadow: 0 0 12px rgba(56, 189, 248, 0.35);
+  animation: pulse-border 1.6s infinite;
+}
+
+.mic-trigger-btn.listening:hover {
+  background: rgba(14, 165, 233, 0.32);
+  box-shadow: 0 0 16px rgba(56, 189, 248, 0.55);
+}
+
+.mic-trigger-btn.paused {
+  color: #f87171;
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  opacity: 0.85;
+}
+
+.mic-trigger-btn.paused:hover {
+  opacity: 1;
+  background: rgba(239, 68, 68, 0.22);
+  color: #fca5a5;
+  box-shadow: 0 0 10px rgba(239, 68, 68, 0.3);
 }
 
 .send-msg-btn {
@@ -900,3 +955,260 @@ input:checked + .slider-round:before {
   z-index: 999999;
   backdrop-filter: blur(8px);
 }
+
+/* Drawer Label Row & Refresh Microphones Button */
+.drawer-label-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.drawer-label-row label {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.btn-refresh-mics {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 500;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transition: all 0.2s ease;
+}
+
+.btn-refresh-mics:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--text-primary);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.btn-refresh-mics:active {
+  transform: scale(0.96);
+}
+
+.btn-refresh-mics.refreshing {
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+.btn-refresh-mics.refreshing .refresh-icon {
+  display: inline-block;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes pulse-border {
+  0% {
+    box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.5);
+  }
+  70% {
+    box-shadow: 0 0 0 8px rgba(56, 189, 248, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(56, 189, 248, 0);
+  }
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Live Mic Test & Floating Pill */
+.mic-test-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.mic-test-btn.testing {
+  background: linear-gradient(135deg, rgba(239, 68, 68, 0.25), rgba(245, 158, 11, 0.25)) !important;
+  border: 1px solid rgba(239, 68, 68, 0.6) !important;
+  color: #fca5a5 !important;
+  box-shadow: 0 0 16px rgba(239, 68, 68, 0.35) !important;
+  animation: pulse-border-red 1.4s infinite;
+}
+
+@keyframes pulse-border-red {
+  0% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.5);
+  }
+  70% {
+    box-shadow: 0 0 0 8px rgba(239, 68, 68, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
+  }
+}
+
+.live-verdict-badge {
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.2s ease;
+}
+
+.live-verdict-badge.silence {
+  background: rgba(100, 116, 139, 0.15);
+  color: #94a3b8;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+}
+
+.live-verdict-badge.moderate {
+  background: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.35);
+}
+
+.live-verdict-badge.clear {
+  background: rgba(16, 185, 129, 0.2);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.45);
+  box-shadow: 0 0 10px rgba(16, 185, 129, 0.25);
+}
+
+.badge-silence {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: var(--radius-full);
+  background: rgba(239, 68, 68, 0.2);
+  color: #f87171;
+  font-weight: 600;
+}
+
+.floating-mic-test-pill {
+  position: fixed;
+  bottom: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 999999;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: rgba(15, 23, 42, 0.94);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5), 0 0 16px rgba(56, 189, 248, 0.2);
+  padding: 8px 16px;
+  border-radius: var(--radius-full);
+  animation: slideUpFade 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes slideUpFade {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 15px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+.pill-pulse-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #f43f5e;
+  animation: pulse-dot 1s infinite;
+  transition: background 0.2s ease, box-shadow 0.2s ease;
+}
+
+.pill-pulse-dot.clear {
+  background: #10b981 !important;
+  box-shadow: 0 0 10px #10b981 !important;
+}
+
+.pill-pulse-dot.moderate {
+  background: #f59e0b !important;
+  box-shadow: 0 0 10px #f59e0b !important;
+}
+
+.pill-pulse-dot.silence {
+  background: #ef4444 !important;
+  box-shadow: 0 0 8px rgba(239, 68, 68, 0.5) !important;
+}
+
+@keyframes pulse-dot {
+  0% { transform: scale(0.9); opacity: 0.8; }
+  50% { transform: scale(1.3); opacity: 1; }
+  100% { transform: scale(0.9); opacity: 0.8; }
+}
+
+.pill-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pill-title {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.pill-verdict {
+  font-size: 12px;
+  font-weight: 700;
+  color: #38bdf8;
+  white-space: nowrap;
+}
+
+.pill-mini-meter {
+  width: 60px;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.pill-meter-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, #34d399, #38bdf8);
+  transition: width 0.08s ease;
+}
+
+.pill-pause-btn {
+  background: rgba(239, 68, 68, 0.2);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  color: #fca5a5;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  transition: all 0.2s ease;
+}
+
+.pill-pause-btn:hover {
+  background: rgba(239, 68, 68, 0.35);
+  color: #fff;
+  transform: scale(1.04);
+}
+
+

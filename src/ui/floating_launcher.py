@@ -91,7 +91,27 @@ class FloatingLauncherBubble:
         self.canvas.bind("<Leave>", self._on_leave)
         self.canvas.bind("<Button-3>", self._show_context_menu)
 
+        # Iniciar oculta mientras el chat principal está activo
+        self.root.withdraw()
+
         self.root.mainloop()
+
+    def hide(self):
+        """Oculta la burbuja (cuando el panel de chat está desplegado)."""
+        if self.root:
+            try:
+                self.root.after(0, self.root.withdraw)
+            except Exception:
+                pass
+
+    def show(self):
+        """Muestra la burbuja flotante (cuando el panel de chat se minimiza)."""
+        if self.root:
+            try:
+                self.root.after(0, self.root.deiconify)
+            except Exception:
+                pass
+
 
     def _render_bubble(self):
         """Dibuja el círculo con estilo cyberpunk oscuro semi-transparente y halo cian brillante."""

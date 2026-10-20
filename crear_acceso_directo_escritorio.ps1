@@ -3,8 +3,18 @@ $WshShell = New-Object -ComObject WScript.Shell
 $DesktopPath = [System.Environment]::GetFolderPath('Desktop')
 $ShortcutPath = Join-Path -Path $DesktopPath -ChildPath "Vanshee.lnk"
 
-$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$ScriptDir = $PSScriptRoot
+if (-not $ScriptDir -and $MyInvocation.MyCommand.Path) {
+    $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+}
+if (-not $ScriptDir) {
+    $ScriptDir = (Get-Location).Path
+}
+
 $TargetExe = Join-Path -Path $ScriptDir -ChildPath "dist\Vanshee\Vanshee.exe"
+if (-not (Test-Path $TargetExe)) {
+    $TargetExe = Join-Path -Path $ScriptDir -ChildPath "Vanshee.exe"
+}
 
 if (Test-Path $TargetExe) {
     $Shortcut = $WshShell.CreateShortcut($ShortcutPath)
@@ -14,5 +24,6 @@ if (Test-Path $TargetExe) {
     $Shortcut.Save()
     Write-Host "✅ Acceso directo creado exitosamente en tu Escritorio: $ShortcutPath" -ForegroundColor Green
 } else {
-    Write-Host "❌ No se encontró $TargetExe. Asegúrate de compilar el proyecto primero." -ForegroundColor Red
+    Write-Host "❌ No se encontró el ejecutable en $ScriptDir." -ForegroundColor Red
 }
+

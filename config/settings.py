@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     
     # Audio & Wake-Word
     WAKE_WORD: str = "v_anshee"
-    STT_MODEL_SIZE: str = "medium"  # whisper local model size (small, medium)
+    STT_MODEL_SIZE: str = "small"  # whisper local model size (small, medium)
     
     # NLU / LLM Config
     LLM_PROVIDER: str = "ollama"  # "ollama" o "openai"
@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     WEB_HOST: str = "127.0.0.1"
     WEB_PORT: int = 8000
     ENABLE_VOICE_VERIFICATION: bool = False
-    AUDIO_THRESHOLD_RMS: float = 100.0
+    AUDIO_THRESHOLD_RMS: float = 45.0
     AUDIO_INPUT_DEVICE: int | None = None
     AUDIO_DEVICE_NAME: str = ""
     TTS_VOICE: str = "es-ES-ElviraNeural"
