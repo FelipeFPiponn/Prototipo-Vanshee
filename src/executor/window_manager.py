@@ -55,6 +55,8 @@ class WindowManager:
         "steam": {"keywords": ["steam"], "processes": ["steam.exe", "steam"]},
         "discord": {"keywords": ["discord"], "processes": ["discord.exe", "discord"]},
         "brave": {"keywords": ["brave"], "processes": ["brave.exe", "brave"]},
+        "navegador": {"keywords": ["brave", "chrome", "edge", "firefox", "opera"], "processes": ["brave.exe", "chrome.exe", "msedge.exe", "firefox.exe", "opera.exe"]},
+        "browser": {"keywords": ["brave", "chrome", "edge", "firefox", "opera"], "processes": ["brave.exe", "chrome.exe", "msedge.exe", "firefox.exe", "opera.exe"]},
         "chrome": {"keywords": ["chrome", "google chrome"], "processes": ["chrome.exe", "chrome"]},
         "edge": {"keywords": ["edge", "microsoft edge"], "processes": ["msedge.exe", "msedge"]},
         "firefox": {"keywords": ["firefox", "mozilla firefox"], "processes": ["firefox.exe", "firefox"]},
@@ -874,6 +876,9 @@ class WindowManager:
                 if self.close_window(w["hwnd"]):
                     closed_count += 1
 
+        if closed_count > 0:
+            time.sleep(0.12)
+
         # Cierre y terminación limpia de procesos residuales en segundo plano
         terminated_count = 0
         try:
@@ -881,8 +886,12 @@ class WindowManager:
             for proc in psutil.process_iter(["pid", "name"]):
                 try:
                     p_name = proc.info["name"].lower()
+                    # Protecciones del sistema y de Vanshee
+                    if any(safe in p_name for safe in ["antigravity", "vanshee", "python", "system", "registry", "svchost"]):
+                        if clean_target not in ["antigravity", "vanshee"]:
+                            continue
                     if any(tp.lower() == p_name or tp.lower() in p_name for tp in target_procs) or (
-                        clean_target in p_name and clean_target not in ["python", "python.exe", "code", "system", "cmd"]
+                        clean_target in p_name and clean_target not in ["python", "python.exe", "code", "system", "cmd", "antigravity", "antigravity ide", "vanshee"]
                     ):
                         proc.terminate()
                         terminated_count += 1

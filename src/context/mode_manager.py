@@ -48,47 +48,36 @@ class ModeManager:
         self._callbacks: List[Callable[[str, Dict[str, Any]], None]] = []
         self._load_persisted_mode()
 
-    def _get_db_connection(self) -> sqlite3.Connection:
-        if settings and hasattr(settings, "DB_PATH"):
-            db_path = settings.DB_PATH
-        else:
-            db_path = Path(__file__).resolve().parent.parent.parent / "data" / "vanshee.db"
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-        return sqlite3.connect(str(db_path))
-
     def _load_persisted_mode(self):
         """Carga el modo activo guardado previamente en SQLite."""
         try:
-            conn = self._get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS user_preferences (
-                    pref_key TEXT PRIMARY KEY,
-                    pref_value TEXT NOT NULL,
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            cursor.execute("SELECT pref_value FROM user_preferences WHERE pref_key = 'active_mode'")
-            row = cursor.fetchone()
-            conn.close()
-            if row and row[0]:
-                raw_mode = row[0].lower().strip()
-                self._current_mode = self.normalize_mode_name(raw_mode)
+            from src.routines.db import get_db_cursor
+            with get_db_cursor() as cursor:
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS user_preferences (
+                        pref_key TEXT PRIMARY KEY,
+                        pref_value TEXT NOT NULL,
+                        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
+                cursor.execute("SELECT pref_value FROM user_preferences WHERE pref_key = 'active_mode'")
+                row = cursor.fetchone()
+                if row and row[0]:
+                    raw_mode = row[0].lower().strip()
+                    self._current_mode = self.normalize_mode_name(raw_mode)
         except Exception as e:
             print(f"[ModeManager Warning] No se pudo leer modo de base de datos: {e}")
 
     def _save_persisted_mode(self, mode: str):
         """Guarda el modo activo en SQLite."""
         try:
-            conn = self._get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO user_preferences (pref_key, pref_value, updated_at)
-                VALUES ('active_mode', ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(pref_key) DO UPDATE SET pref_value = excluded.pref_value, updated_at = CURRENT_TIMESTAMP
-            """, (mode,))
-            conn.commit()
-            conn.close()
+            from src.routines.db import get_db_cursor
+            with get_db_cursor() as cursor:
+                cursor.execute("""
+                    INSERT INTO user_preferences (pref_key, pref_value, updated_at)
+                    VALUES ('active_mode', ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(pref_key) DO UPDATE SET pref_value = excluded.pref_value, updated_at = CURRENT_TIMESTAMP
+                """, (mode,))
         except Exception as e:
             print(f"[ModeManager Warning] No se pudo persistir modo en base de datos: {e}")
 

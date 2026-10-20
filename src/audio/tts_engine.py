@@ -96,7 +96,8 @@ class TTSEngine:
 
     def set_voice(self, voice_id: str):
         self.voice = voice_id
-        settings.TTS_VOICE = voice_id
+        from config.settings import save_setting
+        save_setting("TTS_VOICE", voice_id)
 
     def generate_audio_file(self, text: str, voice: str | None = None) -> str:
         """Genera un archivo de audio MP3 usando la voz seleccionada."""

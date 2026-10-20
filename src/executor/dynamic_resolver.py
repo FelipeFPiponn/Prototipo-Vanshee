@@ -54,36 +54,41 @@ class DynamicResolver:
         self.steam_indexer = self.indexer.steam_indexer
 
     def get_learned_command(self, keyword: str) -> str | None:
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute("SELECT execution_target FROM learned_commands WHERE keyword = ?", (keyword.lower(),))
-        row = cursor.fetchone()
-        conn.close()
-        return row[0] if row else None
+        from src.routines.db import get_db_cursor
+        with get_db_cursor() as cursor:
+            cursor.execute("SELECT execution_target FROM learned_commands WHERE keyword = ?", (keyword.lower(),))
+            row = cursor.fetchone()
+        if not row:
+            return None
+        target = row[0]
+        if "\\" in target or "/" in target or "%" in target:
+            from src.utils.path_resolver import normalize_user_path
+            norm_p = normalize_user_path(target)
+            if norm_p.exists():
+                return str(norm_p)
+            return None
+        return target
 
     def save_learned_command(self, keyword: str, execution_target: str, command_type: str = "app"):
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT OR REPLACE INTO learned_commands (keyword, execution_target, command_type)
-            VALUES (?, ?, ?)
-        """, (keyword.lower(), execution_target, command_type))
-        conn.commit()
-        conn.close()
-        print(f"[Aprendizaje] V.ANSHEE aprendió: '{keyword}' -> '{execution_target}'")
+        from src.utils.path_resolver import to_portable_path
+        portable_target = to_portable_path(execution_target) if ("\\" in execution_target or "/" in execution_target) else execution_target
+        from src.routines.db import get_db_cursor
+        with get_db_cursor() as cursor:
+            cursor.execute("""
+                INSERT OR REPLACE INTO learned_commands (keyword, execution_target, command_type)
+                VALUES (?, ?, ?)
+            """, (keyword.lower(), portable_target, command_type))
+        print(f"[Aprendizaje] V.ANSHEE aprendió: '{keyword}' -> '{portable_target}'")
 
     def forget_command(self, target: str) -> bool:
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
         target_clean = target.lower().strip()
-        if target_clean in ["last", "previous", "anterior", "eso", "none", "ultimo"]:
-            cursor.execute("DELETE FROM learned_commands WHERE id = (SELECT MAX(id) FROM learned_commands)")
-        else:
-            cursor.execute("DELETE FROM learned_commands WHERE keyword LIKE ?", (f"%{target_clean}%",))
-        
-        deleted_count = cursor.rowcount
-        conn.commit()
-        conn.close()
+        from src.routines.db import get_db_cursor
+        with get_db_cursor() as cursor:
+            if target_clean in ["last", "previous", "anterior", "eso", "none", "ultimo"]:
+                cursor.execute("DELETE FROM learned_commands WHERE id = (SELECT MAX(id) FROM learned_commands)")
+            else:
+                cursor.execute("DELETE FROM learned_commands WHERE keyword LIKE ?", (f"%{target_clean}%",))
+            deleted_count = cursor.rowcount
         return deleted_count > 0
 
     def resolve(self, target: str) -> tuple[str | None, str]:

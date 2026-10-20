@@ -16,9 +16,14 @@ Set-Location -LiteralPath $Root
 
 $Python = Join-Path $Root ".venv\Scripts\python.exe"
 if (-not (Test-Path $Python)) {
-    $PythonFallback = "C:\Users\$env:USERNAME\AppData\Local\Programs\Python\Python311\python.exe"
-    if (Test-Path $PythonFallback) {
-        $Python = $PythonFallback
+    $pythonCmd = (Get-Command python -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source)
+    if ($pythonCmd -and (Test-Path $pythonCmd)) {
+        $Python = $pythonCmd
+    } else {
+        $found = Get-ChildItem -Path "$env:LOCALAPPDATA\Programs\Python\Python*\python.exe", "$env:ProgramFiles\Python*\python.exe", "C:\Python*\python.exe" -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
+        if ($found -and (Test-Path $found)) {
+            $Python = $found
+        }
     }
 }
 $DistExe = Join-Path $Root "dist\Vanshee\Vanshee.exe"

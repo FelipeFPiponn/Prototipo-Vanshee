@@ -106,30 +106,27 @@ class SearchProviderRegistry:
 
     def _load_learned_providers(self):
         try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            cursor.execute("SELECT target_key, provider_json FROM learned_search_providers")
-            for row in cursor.fetchall():
-                data = json.loads(row[1])
-                provider = SearchProvider(**data)
-                self.providers[row[0]] = provider
-            conn.close()
+            from src.routines.db import get_db_cursor
+            with get_db_cursor() as cursor:
+                cursor.execute("SELECT target_key, provider_json FROM learned_search_providers")
+                for row in cursor.fetchall():
+                    data = json.loads(row[1])
+                    provider = SearchProvider(**data)
+                    self.providers[row[0]] = provider
         except Exception as e:
             print(f"[SearchRegistry Warning] Error cargando proveedores aprendidos: {e}")
 
     def save_learned_provider(self, provider: SearchProvider):
         try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                INSERT OR REPLACE INTO learned_search_providers (target_key, provider_json)
-                VALUES (?, ?)
-                """,
-                (provider.id, json.dumps(asdict(provider)))
-            )
-            conn.commit()
-            conn.close()
+            from src.routines.db import get_db_cursor
+            with get_db_cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT OR REPLACE INTO learned_search_providers (target_key, provider_json)
+                    VALUES (?, ?)
+                    """,
+                    (provider.id, json.dumps(asdict(provider)))
+                )
             self.providers[provider.id] = provider
             print(f"[SearchRegistry] Nuevo proveedor aprendido y guardado: '{provider.name}'")
         except Exception as e:

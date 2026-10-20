@@ -20,6 +20,16 @@ def strip_wake_and_polite(text: str) -> str:
     c = text.strip()
     c = WAKE_PREFIX_CLEAN_RE.sub("", c).strip()
     c = POLITE_PREFIX_CLEAN_RE.sub("", c).strip()
+    c = c.lstrip(",:;- \t")
+    # Normalizar homófonos de seseo de Whisper en español (sierra/sierre/sierren -> cierra)
+    c = re.sub(r"^(?:sierra|sierre|sierren)\b", "cierra", c, flags=re.IGNORECASE)
+    # Si Whisper añade una coma tras el verbo de acción imperativo al inicio (ej: 'cierra, antigravity' o 'abre, chrome')
+    c = re.sub(
+        r"^(cierra|cerrar|cierre|cierren|abre|abrir|inicia|iniciar|ejecuta|ejecutar|lanza|lanzar|busca|buscar|pon|reproduce|maximiza|minimiza)[,\s]+",
+        r"\1 ",
+        c,
+        flags=re.IGNORECASE
+    )
     return c
 
 class StepParameters(BaseModel):
@@ -77,6 +87,7 @@ class IntentParser:
             "- 'MEDIA_CONTROL' (para pausar, reanudar/play, siguiente pista, pista anterior, silenciar, subir/bajar volumen)\n"
             "- 'SEARCH_CONTENT' (para buscar videos, música o información en YouTube, Google, Spotify o internet)\n"
             "- 'OPEN_APP' (para abrir programas locales, páginas web o accesos directos, permitiendo 'parameters.position' para ubicarlos en la pantalla)\n"
+            "- 'CLOSE_APP' (para cerrar aplicaciones, programas o ventanas específicas como Chrome, Discord, Antigravity)\n"
             "- 'CREATE_PROJECT' (para crear o iniciar nuevos proyectos de código)\n"
             "- 'CREATE_FILE' (para crear archivos en una ruta o proyecto activo)\n"
             "- 'WRITE_TEXT' (para redactar notas o dictados en archivos de texto .txt o prompt a agentes)\n"
@@ -134,6 +145,8 @@ class IntentParser:
             '   {"steps": [{"intent": "MEDIA_CONTROL", "target": "pause", "parameters": {}}], "confidence": 1.0}\n'
             "10. 'abre antigravity y pon el siguiente prompt escribe hola mundo':\n"
             '   {"steps": [{"intent": "OPEN_APP", "target": "antigravity", "parameters": {}}, {"intent": "WRITE_TEXT", "target": "antigravity", "parameters": {"content": "hola mundo"}}], "confidence": 1.0}\n'
+            "11. 'cierra antigravity':\n"
+            '   {"steps": [{"intent": "CLOSE_APP", "target": "antigravity", "parameters": {}}], "confidence": 1.0}\n'
             "Responde ÚNICAMENTE con el objeto JSON."
         )
 
@@ -268,12 +281,25 @@ class IntentParser:
         )
 
         # 1. Pausa / Detener
-        if re.search(r"^(?:pon\s+)?(?:pausa|pausar|pausala|deten|detener|para|parar|stop)(?:\s+(?:la|el)\s+(?:musica|cancion|reproduccion|video|reproductor|spotify|youtube))?(?:\s+(?:en|de)\s+(?:spotify|youtube))?$", norm):
-            return ActionStep(intent="MEDIA_CONTROL", target="pause", parameters=StepParameters())
+        if re.search(
+            r"^(?:(?:pon|poner|ponle|da|dar|dale)(?:\s+(?:a|al|la|el))?\s+)?(?:pausa|pausar|pausala|pausalo|deten|detener|para|parar|stop)"
+            r"(?:\s+(?:la|el)\s+(?:musica|cancion|reproduccion|video|reproductor|spotify|youtube|audio))?"
+            r"(?:\s+(?:en|de|a|al)?\s*(?:spotify|youtube))?$",
+            norm
+        ):
+            target_srv = "spotify" if "spotify" in norm else ("youtube" if "youtube" in norm else "")
+            return ActionStep(intent="MEDIA_CONTROL", target="pause", parameters=StepParameters(content=target_srv))
 
-        # 2. Reanudar / Play / Continuar
-        if re.search(r"^(?:reanuda|reanudar|reproduce|reproducir|continua|continuar|play|dale\s+play)(?:\s+(?:la|el)\s+(?:musica|cancion|reproduccion|video|reproductor|spotify|youtube))?(?:\s+(?:en|de)\s+(?:spotify|youtube))?$", norm):
-            return ActionStep(intent="MEDIA_CONTROL", target="play", parameters=StepParameters())
+        # 2. Reanudar / Play / Continuar / Da Play / Pon Play
+        if re.search(
+            r"^(?:reanuda|reanudar|reproduce|reproducir|continua|continuar|play|"
+            r"(?:da|dar|dale|pon|poner|ponle)(?:\s+(?:a|al|la|el))?\s+play)"
+            r"(?:\s+(?:la|el)\s+(?:musica|cancion|reproduccion|video|reproductor|spotify|youtube|audio))?"
+            r"(?:\s+(?:en|de|a|al)?\s*(?:spotify|youtube))?$",
+            norm
+        ):
+            target_srv = "spotify" if "spotify" in norm else ("youtube" if "youtube" in norm else "")
+            return ActionStep(intent="MEDIA_CONTROL", target="play", parameters=StepParameters(content=target_srv))
 
         # 3. Siguiente canción / pista
         if re.search(r"^(?:siguiente|pasa|pasar|salta|saltar|avanza|avanzar|next)(?:\s+(?:de\s+)?(?:(?:la|el)\s+)?(?:cancion|pista|tema|video|musica))?(?:\s+(?:en|de)\s+(?:spotify|youtube))?$", norm) or norm in ["cancion siguiente", "tema siguiente", "pista siguiente", "siguiente cancion"]:
@@ -334,12 +360,12 @@ class IntentParser:
             if qry and qry.lower() not in ignored_search_terms:
                 return ActionStep(intent="SEARCH_CONTENT", target=target_srv, parameters=StepParameters(content=qry))
 
-        # 1. abre <servicio> y busca <query>
-        m1 = re.search(r"^(?:abre|abrir|inicia|ejecuta)\s+(youtube|google|spotify|brave|chrome|el\s+navegador|el\s+buscador)\s+y\s+(?:busca|buscar|encuentra|pon)\s+(.+)$", clean, flags=re.IGNORECASE)
+        # 1. abre <servicio> [y] busca <query>
+        m1 = re.search(r"^(?:abre|abrir|inicia|ejecuta)\s+(youtube|google|spotify|brave|chrome|el\s+navegador|el\s+buscador)\s+(?:y\s+)?(?:busca|buscar|encuentra|pon)\s+(.+)$", clean, flags=re.IGNORECASE)
         if m1:
             raw_action = m1.group(2).strip()
-            # Si lo que sigue es ajuste de volumen, pausa, prompt o ventana, no es búsqueda en el servicio
-            if not re.search(r"^(?:el\s+)?volumen|pausa|el\s+prompt|la\s+ventana|a\s+la\s+izquierda|a\s+la\s+derecha", raw_action, flags=re.IGNORECASE):
+            # Si lo que sigue es ajuste de volumen, pausa, play, prompt o ventana, no es búsqueda en el servicio
+            if not re.search(r"^(?:el\s+)?volumen|pausa|play|(?:da|dar|dale|pon|poner|ponle)?\s*play|el\s+prompt|la\s+ventana|a\s+la\s+izquierda|a\s+la\s+derecha", raw_action, flags=re.IGNORECASE):
                 srv = m1.group(1).strip().lower().replace("el navegador", "google").replace("el buscador", "google")
                 qry = clean_search_term(raw_action) or raw_action
                 if qry:
@@ -899,21 +925,39 @@ class IntentParser:
                     )
                 )
 
-        # 3. PROYECTOS DE CÓDIGO
-        m_proj = re.search(
-            r"^(?:crea|crear|haz|hacer|inicia|iniciar)?\s*(?:un\s+)?(?:nuevo\s+)?proyecto(?:\s+(?:de\s+)?([a-zA-Z0-9_\-]+))?(?:\s+(?:llamado|de\s+nombre))?(?:\s+(.+))?$",
-            norm,
-            flags=re.IGNORECASE
+        # 3. PROYECTOS DE CÓDIGO Y NUEVAS VENTANAS DE DESARROLLO
+        is_project_cmd = (
+            re.search(r"\b(?:nuevo\s+proyecto|proyecto\s+nuevo|un\s+proyecto)\b", norm) or
+            re.search(r"^(?:crea|crear|haz|hacer|inicia|iniciar|abre|abrir)\s+(?:un\s+)?(?:nuevo\s+)?proyecto\b", norm) or
+            re.search(r"^(?:abre|abrir|inicia|iniciar|crea|crear)\s+(?:un\s+)?(?:nuevo\s+)?proyecto\s+(?:en|con|de)\s+([a-zA-Z0-9_\-\.\s]+)$", norm)
         )
-        if m_proj and any(k in norm for k in ["proyecto", "proyectos"]):
-            p_type = (m_proj.group(1) or "python").strip().lower()
-            p_name = (m_proj.group(2) or "nuevo_proyecto").strip("'\" \t")
+        if is_project_cmd:
+            target_ide = "antigravity" if "antigravity" in norm else "vscode"
+            if "cursor" in norm:
+                target_ide = "cursor"
+            elif any(k in norm for k in ["vs code", "vscode", "visual studio code"]):
+                target_ide = "vscode"
+            elif "pycharm" in norm:
+                target_ide = "pycharm"
+
+            p_name = "nuevo_proyecto"
+            m_name = re.search(r"(?:llamado|de\s+nombre|con\s+nombre)\s+([a-zA-Z0-9_\-]+)", norm)
+            if m_name:
+                p_name = m_name.group(1).strip()
+
+            p_type = "empty"
+            for t in ["python", "node", "react", "fastapi", "vue", "javascript", "web", "html", "rust", "cpp"]:
+                if f"de {t}" in norm or f"en {t}" in norm:
+                    p_type = t
+                    break
+
             return ActionStep(
                 intent="CREATE_PROJECT",
-                target="vscode",
+                target=target_ide,
                 parameters=StepParameters(
                     project_type=p_type,
-                    project_name=p_name
+                    project_name=p_name,
+                    position="new_window"
                 )
             )
 
@@ -993,38 +1037,51 @@ class IntentParser:
     def _fast_open_app_check(self, text: str) -> ActionStep | None:
         """Detección ultra-rápida y determinista de comandos simples de apertura de apps."""
         clean = strip_wake_and_polite(text)
-        m = re.search(r"^(?:abre|abrir|inicia|iniciar|ejecuta|ejecutar|lanza|lanzar)\s+(?:la\s+app\s+de\s+|el\s+programa\s+de\s+|la\s+aplicacion\s+de\s+|el\s+)?([a-zA-Z0-9_\-\.\s]+)$", clean, flags=re.IGNORECASE)
+        m = re.search(r"^(?:abre|abrir|inicia|iniciar|ejecuta|ejecutar|lanza|lanzar)\s+(?:el\s+navegador\s+(?:de\s+)?|el\s+juego\s+(?:de\s+)?|el\s+programa\s+(?:de\s+)?|la\s+app\s+(?:de\s+)?|la\s+aplicaci[oó]n\s+(?:de\s+)?|el\s+)?([a-zA-Z0-9_\-\.\s]+)$", clean, flags=re.IGNORECASE)
         if m:
             target = m.group(1).strip().lower()
             if target and target not in ["un archivo", "un proyecto", "una carpeta", "un video", "una cancion", "musica", "el prompt", "la consola", "el navegador"]:
                 if not any(w in target for w in ["busca", "videos de", "canciones de", " y ", " e "]):
-                    return ActionStep(intent="OPEN_APP", target=target, parameters=StepParameters())
+                    position = ""
+                    if "nueva ventana" in target or "ventana nueva" in target:
+                        target = re.sub(r"^(?:una\s+)?(?:nueva\s+ventana|ventana\s+nueva)\s+(?:en|de)\s+", "", target).strip()
+                        position = "new_window"
+                    return ActionStep(intent="OPEN_APP", target=target, parameters=StepParameters(position=position))
         return None
 
     def _fast_close_app_check(self, text: str) -> ActionStep | None:
         """Detección ultra-rápida y determinista de comandos de cierre de programas y ventanas."""
         clean = strip_wake_and_polite(text).strip()
+        # Normalizar homófonos de seseo de Whisper: sierra -> cierra
+        clean = re.sub(r"^(?:sierra|sierre|sierren)\b", "cierra", clean, flags=re.IGNORECASE)
+        clean = re.sub(r"^(?:cierra|cerrar|cierre|cierren)[,\s]+", "cierra ", clean, flags=re.IGNORECASE)
         norm = clean.lower().strip("¿?¡!.,;: \t").replace("á", "a").replace("é", "e").replace("í", "i").replace("ó", "o").replace("ú", "u")
 
         # 1. Cerrar pestaña
-        if any(p in norm for p in ["cierra la pestaña", "cierra pestana", "cerrar pestaña", "cerrar pestana", "cierra esta pestaña"]):
+        if any(p in norm for p in [
+            "cierra la pestaña", "cierra pestana", "cerrar pestaña", "cerrar pestana", "cierra esta pestaña", "cierre la pestaña", "cierre pestana",
+            "sierra la pestaña", "sierra pestana"
+        ]):
             return ActionStep(intent="WINDOW_CONTROL", target="close_tab", parameters=StepParameters())
 
-        # 2. Cerrar ventana activa o en primer plano (ej: 'cierra la ventana', 'cerrar ventana', 'cierra esto')
-        if re.search(r"^(?:cierra|cerrar|quitar|quita|termina|terminar|apaga|apagar|matar|mata|kill)\s+(?:la\s+)?(?:ventana\s+actual|esta\s+ventana|ventana|esto|app\s+actual)$", norm) or norm in [
-            "cierra la ventana", "cierra ventana", "cerrar ventana", "cerrar la ventana", "cierra esto", "cerrar esto", "cierra"
+        # 2. Cerrar ventana activa o en primer plano (ej: 'cierra la ventana', 'cerrar ventana', 'cierra esto', 'cierra')
+        if re.search(r"^(?:cierra|cerrar|cierre|cierren|sierra|sierre|sierren|quitar|quita|termina|terminar|apaga|apagar|matar|mata|kill)[,\s]+(?:la\s+)?(?:ventana\s+actual|esta\s+ventana|ventana|esto|app\s+actual)$", norm) or norm in [
+            "cierra la ventana", "cierra ventana", "cerrar ventana", "cerrar la ventana", "cierra esto", "cerrar esto", "cierra", "cierre", "cierren", "cerrar",
+            "sierra la ventana", "sierra ventana", "sierra esto", "sierra"
         ]:
             return ActionStep(intent="WINDOW_CONTROL", target="active", parameters=StepParameters(position="close"))
 
-        # 3. Cerrar aplicación específica (ej: 'cierra Opera GX', 'cerrar Discord', 'cierra el bloc de notas', 'cierra chrome')
+        # 3. Cerrar aplicación específica (ej: 'cierra Opera GX', 'cerrar Discord', 'cierra el bloc de notas', 'cierra chrome', 'cierra antigravity')
         m_app = re.search(
-            r"^(?:cierra|cerrar|quitar|quita|termina|terminar|apaga|apagar|matar|mata|kill)\s+(?:la\s+app\s+de\s+|el\s+programa\s+de\s+|la\s+aplicacion\s+de\s+|la\s+ventana\s+de\s+|el\s+|la\s+)?([a-zA-Z0-9_\-\.\s]+)$",
+            r"^(?:cierra|cerrar|cierre|cierren|sierra|sierre|sierren|quitar|quita|termina|terminar|apaga|apagar|matar|mata|kill)[,\s]+(?:el\s+navegador\s+(?:de\s+)?|el\s+juego\s+(?:de\s+)?|el\s+proceso\s+(?:de\s+)?|la\s+app\s+(?:de\s+)?|el\s+programa\s+(?:de\s+)?|la\s+aplicaci[oó]n\s+(?:de\s+)?|la\s+ventana\s+(?:de\s+)?|el\s+|la\s+)?([a-zA-Z0-9_\-\.\s]+)$",
             clean,
             flags=re.IGNORECASE
         )
         if m_app:
-            target = m_app.group(1).strip().lower()
-            if target and target not in ["un archivo", "un proyecto", "una carpeta", "la sesion", "sesion", "el sistema", "la pc", "el equipo"]:
+            target = m_app.group(1).strip(" ,:;\t\n").lower()
+            if target and target not in ["un archivo", "un proyecto", "una carpeta", "la sesion", "la sesión", "sesion", "sesión", "el sistema", "la pc", "el equipo"]:
+                if any(conn in f" {target} " for conn in [" y ", " e ", " luego ", " despues ", " después "]):
+                    return None
                 return ActionStep(intent="CLOSE_APP", target=target, parameters=StepParameters())
 
         return None
@@ -1032,13 +1089,20 @@ class IntentParser:
     def get_learned_command(self, keyword: str) -> str | None:
         """Consulta si la instrucción fue aprendida previamente y almacenada en SQLite."""
         try:
-            import sqlite3
-            conn = sqlite3.connect(settings.DB_PATH)
-            cursor = conn.cursor()
-            cursor.execute("SELECT execution_target FROM learned_commands WHERE keyword = ?", (keyword.lower().strip(),))
-            row = cursor.fetchone()
-            conn.close()
-            return row[0] if row else None
+            from src.routines.db import get_db_cursor
+            with get_db_cursor() as cursor:
+                cursor.execute("SELECT execution_target FROM learned_commands WHERE keyword = ?", (keyword.lower().strip(),))
+                row = cursor.fetchone()
+            if not row:
+                return None
+            target = row[0]
+            if "\\" in target or "/" in target or "%" in target:
+                from src.utils.path_resolver import normalize_user_path
+                norm_p = normalize_user_path(target)
+                if norm_p.exists():
+                    return str(norm_p)
+                return None
+            return target
         except Exception:
             return None
 
@@ -1088,8 +1152,8 @@ class IntentParser:
         if re.search(r"^busca\s+(?:solo\s+todo|solotodo)", clean, flags=re.IGNORECASE):
             return None
 
-        # Si es 'abre X y busca Y', eso es un comando atómico de búsqueda (cubierto por _fast_search_check)
-        if re.search(r"^(?:abre|inicia)\s+[a-zA-Z0-9_\-]+\s+y\s+(?:busca|buscar|encuentra)\s+", clean, flags=re.IGNORECASE):
+        # Si es 'abre X [y] busca Y', eso es un comando atómico de búsqueda (cubierto por _fast_search_check)
+        if re.search(r"^(?:abre|inicia)\s+[a-zA-Z0-9_\-]+\s+(?:y\s+)?(?:busca|buscar|encuentra)\s+", clean, flags=re.IGNORECASE):
             return None
         if re.search(r"^(?:busca|pon|reproduce)\s+.+\s+y\s+(?:reproduce|pon|dale\s+play)", clean, flags=re.IGNORECASE):
             return None
@@ -1097,7 +1161,15 @@ class IntentParser:
         delimiters = [r"\s*,\s*y\s+", r"\s+y\s+", r"\s+e\s+", r"\s+luego\s+", r"\s+despues\s+", r"\s+después\s+", r"\s*,\s*"]
         pattern = "|".join(f"(?:{d})" for d in delimiters)
 
-        parts = [p.strip() for p in re.split(pattern, clean, flags=re.IGNORECASE) if p.strip()]
+        raw_parts = [p.strip() for p in re.split(pattern, clean, flags=re.IGNORECASE) if p.strip()]
+
+        # Subdividir partes si contienen verbos de acción explícitos sin delimitadores (ej: 'abre lol abre youtube')
+        verb_split_pattern = r"\s+(?=(?:abre|abrir|inicia|iniciar|ejecuta|ejecutar|lanza|lanzar|cierra|cerrar|cierre|cierren|sierra|sierre|sierren|da\s+play|dale\s+play|dar\s+play|pon\s+play|ponle\s+play|pausa|pausar|deten|detener|silencia|silenciar)(?:\s+|$))"
+        parts = []
+        for p_str in raw_parts:
+            sub = [s.strip() for s in re.split(verb_split_pattern, p_str, flags=re.IGNORECASE) if s.strip()]
+            parts.extend(sub)
+
         if len(parts) < 2:
             return None
 
@@ -1129,6 +1201,8 @@ class IntentParser:
             return "WRITE_TEXT"
         if "CREATE_PROJECT" in raw or "CREATE" in raw or "PROJECT" in raw:
             return "CREATE_PROJECT"
+        if any(w in raw for w in ["CLOSE", "CIERRA", "CERRAR", "KILL", "TERMINA", "QUIT"]):
+            return "CLOSE_APP"
         if "OPEN_APP" in raw or "OPEN" in raw:
             return "OPEN_APP"
         if "SYSTEM" in raw:

@@ -1,14 +1,32 @@
 import os
 import re
+import time
+import threading
 import difflib
 from pathlib import Path
+from typing import Optional
 from src.executor.steam_indexer import SteamIndexer
 
 class AppIndexer:
-    def __init__(self):
+    _instance: Optional["AppIndexer"] = None
+    _lock = threading.Lock()
+
+    def __new__(cls, *args, **kwargs):
+        with cls._lock:
+            if cls._instance is None:
+                cls._instance = super().__new__(cls)
+                cls._instance._initialized = False
+            return cls._instance
+
+    def __init__(self, cache_ttl_seconds: int = 3600):
+        if getattr(self, "_initialized", False):
+            return
+        self.cache_ttl = cache_ttl_seconds
+        self._last_scan = 0.0
         self.app_index: dict[str, str] = {}
         self.steam_indexer = SteamIndexer()
-        self.refresh_index()
+        self.refresh_index(force=True)
+        self._initialized = True
 
     def _get_search_directories(self) -> list[Path]:
         """Obtiene las rutas estándar donde Windows almacena accesos directos de programas."""
@@ -16,12 +34,16 @@ class AppIndexer:
             Path(os.path.expandvars(r"%PROGRAMDATA%\Microsoft\Windows\Start Menu\Programs")),
             Path(os.path.expandvars(r"%APPDATA%\Microsoft\Windows\Start Menu\Programs")),
             Path(os.path.expandvars(r"%USERPROFILE%\Desktop")),
-            Path(r"C:\Users\Public\Desktop"),
+            Path(os.path.expandvars(r"%PUBLIC%\Desktop")),
         ]
         return [d for d in dirs if d.exists()]
 
-    def refresh_index(self):
+    def refresh_index(self, force: bool = False):
         """Escanea el sistema y construye un índice local de aplicaciones y juegos."""
+        now = time.time()
+        if not force and (now - self._last_scan) < self.cache_ttl and len(self.app_index) > 0:
+            return
+        self._last_scan = now
         self.app_index.clear()
         
         # 1. Escanear accesos directos locales (.lnk, .exe, .url)
@@ -91,9 +113,12 @@ class AppIndexer:
         common_candidates = {
             "discord": [
                 os.path.expandvars(r"%LocalAppData%\Discord\Update.exe --processStart Discord.exe"),
+                os.path.expandvars(r"%LocalAppData%\Programs\Discord\Discord.exe"),
             ],
             "opera gx": [
                 os.path.expandvars(r"%LocalAppData%\Programs\Opera GX\launcher.exe"),
+                os.path.expandvars(r"%ProgramFiles%\Opera GX\launcher.exe"),
+                os.path.expandvars(r"%ProgramFiles(x86)%\Opera GX\launcher.exe"),
             ],
             "chrome": [
                 os.path.expandvars(r"%ProgramFiles%\Google\Chrome\Application\chrome.exe"),
@@ -109,7 +134,9 @@ class AppIndexer:
                 os.path.expandvars(r"%ProgramFiles%\Microsoft\Edge\Application\msedge.exe"),
             ],
             "spotify": [
-                os.path.expandvars(r"%APPDATA%\Spotify\Spotify.exe")
+                os.path.expandvars(r"%APPDATA%\Spotify\Spotify.exe"),
+                os.path.expandvars(r"%LocalAppData%\Microsoft\WindowsApps\Spotify.exe"),
+                os.path.expandvars(r"%USERPROFILE%\AppData\Roaming\Spotify\Spotify.exe"),
             ],
             "vscode": [
                 os.path.expandvars(r"%LocalAppData%\Programs\Microsoft VS Code\Code.exe"),

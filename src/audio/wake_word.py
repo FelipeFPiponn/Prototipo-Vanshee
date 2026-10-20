@@ -26,19 +26,6 @@ WAKE_PATTERN = re.compile(
     re.IGNORECASE
 )
 
-DIRECT_COMMAND_PATTERN = re.compile(
-    r"^(?:abre|abrir|inicia|iniciar|ejecuta|ejecutar|lanza|lanzar|"
-    r"busca|buscar|encuentra|reproduce|reproducir|pon|coloca|toca|tocar|"
-    r"pausa|pausar|reanuda|reanudar|play|stop|silencia|silenciar|mute|mutear|desmutear|"
-    r"volumen|sube|subir|aumenta|aumentar|baja|bajar|disminuye|disminuir|ajusta|ajustar|"
-    r"cierra|cerrar|apaga|apagar|termina|terminar|mata|matar|kill|quitar|quita|"
-    r"minimiza|minimizar|maximiza|maximizar|restaura|restaurar|"
-    r"divide|dividir|ordena|ordenar|organiza|organizar|"
-    r"crea|crear|haz|hacer|nuevo\s+archivo|nueva\s+carpeta|"
-    r"con[eé]ctate|conectar|descon[eé]ctate|desconectar)\b",
-    re.IGNORECASE
-)
-
 class WakeWordDetector:
     """
     Detector continuo de palabra de activación ("Banshee" / "Vanshee") en segundo plano.
@@ -51,7 +38,6 @@ class WakeWordDetector:
         stt_engine=None,
         on_wake_detected: Optional[Callable[[str, str], None]] = None,
         on_state_change: Optional[Callable[[str], None]] = None,
-        is_awaiting_feedback: Optional[Callable[[], bool]] = None,
         sample_rate: int = 16000,
         threshold_rms: float | None = None,
         device_index: int | None = None,
@@ -59,7 +45,6 @@ class WakeWordDetector:
         self.stt_engine = stt_engine
         self.on_wake_detected = on_wake_detected
         self.on_state_change = on_state_change
-        self.is_awaiting_feedback = is_awaiting_feedback
         self.sample_rate = sample_rate
         self.threshold_rms = threshold_rms if threshold_rms is not None else getattr(settings, "AUDIO_THRESHOLD_RMS", 45.0)
         self.device_index = device_index if device_index is not None else getattr(settings, "AUDIO_INPUT_DEVICE", None)
@@ -174,15 +159,32 @@ class WakeWordDetector:
         ]):
             return False, ""
 
-        # 1. Verificar palabra de activación explícita (ej: "vanshe abre opera gx", "vanshe realiza o abre...")
+        # 1. Verificar palabra de activación explícita
+        match_raw = WAKE_PATTERN.search(text)
+        if match_raw:
+            trailing = text[match_raw.end():].strip().lstrip(",:;- ")
+            while True:
+                m_sub = WAKE_PATTERN.match(trailing)
+                if m_sub:
+                    trailing = trailing[m_sub.end():].strip().lstrip(",:;- ")
+                else:
+                    break
+            trailing = re.sub(
+                r"^(?:por\s+favor|puedes|podr[ií]as|quiero\s+que|realiza\s+o|hazme\s+el\s+favor\s+de|dime|haz\s+el\s+favor\s+de|ejecuta)\s+",
+                "",
+                trailing,
+                flags=re.IGNORECASE
+            ).strip().lstrip(",:;- ")
+            return True, trailing
+
         match = WAKE_PATTERN.search(clean)
         if match:
-            trailing = clean[match.end():].strip()
+            trailing = clean[match.end():].strip().lstrip(",:;- ")
             # Eliminar palabras de activación redundantes adicionales al inicio (ej: "banshee banshee...")
             while True:
                 m_sub = WAKE_PATTERN.match(trailing)
                 if m_sub:
-                    trailing = trailing[m_sub.end():].strip()
+                    trailing = trailing[m_sub.end():].strip().lstrip(",:;- ")
                 else:
                     break
             # Limpiar fórmulas de petición o conectores ("por favor", "realiza o", "puedes", etc.)
@@ -191,29 +193,17 @@ class WakeWordDetector:
                 "",
                 trailing,
                 flags=re.IGNORECASE
-            ).strip()
+            ).strip().lstrip(",:;- ")
             return True, trailing
 
-        # 2. Si estamos dentro de la ventana de escucha activa tras decir "¿Dime?" o en diálogo de aprendizaje
-        awaiting = bool(self.is_awaiting_feedback and self.is_awaiting_feedback())
-        if (time.time() < self._active_command_until or awaiting) and len(clean) >= 2:
+        # 2. Si estamos dentro de la ventana de escucha activa tras decir "¿Dime?"
+        if (time.time() < self._active_command_until) and len(clean) >= 2:
             clean_cmd = re.sub(
                 r"^(?:por\s+favor|puedes|podr[ií]as|quiero\s+que|realiza\s+o|hazme\s+el\s+favor\s+de|dime|haz\s+el\s+favor\s+de|ejecuta)\s+",
                 "",
                 clean,
                 flags=re.IGNORECASE
-            ).strip()
-            return True, clean_cmd
-
-        # 3. Comandos directos accionables sin necesidad de repetir 'vanshe' obligatoriamente cada vez
-        m_direct = DIRECT_COMMAND_PATTERN.search(clean)
-        if m_direct and len(clean) >= 4:
-            clean_cmd = re.sub(
-                r"^(?:por\s+favor|puedes|podr[ií]as|quiero\s+que|realiza\s+o|hazme\s+el\s+favor\s+de|dime|haz\s+el\s+favor\s+de|ejecuta)\s+",
-                "",
-                clean,
-                flags=re.IGNORECASE
-            ).strip()
+            ).strip().lstrip(",:;- ")
             return True, clean_cmd
 
         # Si el usuario solo está hablando normalmente (en llamada, con amigos, etc.), se ignora por completo
@@ -234,8 +224,7 @@ class WakeWordDetector:
                 # Inferencia directa en memoria RAM (np.ndarray) sin latencia de disco
                 text = self.stt_engine.transcribe(audio_data)
                 now = time.time()
-                awaiting = bool(self.is_awaiting_feedback and self.is_awaiting_feedback())
-                can_trigger = (time.time() < self._active_command_until) or awaiting or ((now - self._last_trigger_time) > 1.0)
+                can_trigger = (time.time() < self._active_command_until) or ((now - self._last_trigger_time) > 1.0)
                 if text and can_trigger:
                     is_wake, command = self._extract_command_after_wake(text)
                     if is_wake:
@@ -248,8 +237,6 @@ class WakeWordDetector:
                             if not command:
                                 self._active_command_until = now + 10.0
                                 self._last_trigger_time = 0.0
-                            elif awaiting:
-                                self._active_command_until = now + 15.0
                             else:
                                 self._active_command_until = 0.0
 

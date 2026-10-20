@@ -35,3 +35,11 @@ data/vanshee.db
 # Executables & temporary dumps
 Vanshee.exe
 dist/*.txt
+build/
+dist/
+dist_installer/
+installer/
+*.rar
+*.zip
+*.7z
+*.spec.bak

@@ -33,11 +33,20 @@ from src.integrations.editor_hub import editor_hub
 
 app = FastAPI(title="V.ANSHEE Core Assistant Console", version="2.5.0")
 
+ALLOWED_ORIGINS = [
+    f"http://127.0.0.1:{settings.WEB_PORT}",
+    f"http://localhost:{settings.WEB_PORT}",
+    f"http://{settings.WEB_HOST}:{settings.WEB_PORT}",
+    "http://127.0.0.1",
+    "http://localhost",
+    "null",  # Soporte para pywebview / webview embebido local
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -180,8 +189,6 @@ def on_wake_word_detected(full_phrase: str, trailing_command: str):
         # 2. Ejecutar la acción correspondiente con el cerebro de Vanshee
         brain = get_brain()
         res = brain.handle_user_input(clean_cmd)
-        if brain.is_awaiting_user_feedback() and state.wake_detector is not None:
-            state.wake_detector.trigger_manual_listen(duration=15.0)
 
         res_payload = {
             "source": "wake_word",
@@ -230,7 +237,6 @@ def init_wake_word():
             state.wake_detector = WakeWordDetector(
                 stt_engine=stt,
                 on_wake_detected=on_wake_word_detected,
-                is_awaiting_feedback=lambda: state.brain.is_awaiting_user_feedback() if state.brain else False,
                 threshold_rms=getattr(settings, "AUDIO_THRESHOLD_RMS", 45.0),
                 device_index=getattr(settings, "AUDIO_INPUT_DEVICE", None)
             )
@@ -331,7 +337,7 @@ class WindowBridge:
         try:
             import win32gui
             import win32con
-            for title in ["Vanshee Chat", "Vanshee", "Banshee Chat", "Banshee"]:
+            for title in ["Vanshee Chat", "Banshee Chat"]:
                 hwnd = win32gui.FindWindow(None, title)
                 if hwnd:
                     win32gui.ShowWindow(hwnd, win32con.SW_HIDE)
@@ -1422,6 +1428,15 @@ def _resolve_web_dir() -> Path:
         for sub in [exe_dir / "src" / "web", exe_dir / "_internal" / "src" / "web", exe_dir / "web"]:
             if sub.exists():
                 return sub
+    cand = Path(__file__).resolve().parent / "web"
+    if cand.exists():
+        return cand
+    cand = ROOT_DIR / "src" / "web"
+    if cand.exists():
+        return cand
+    cand = Path.cwd() / "src" / "web"
+    if cand.exists():
+        return cand
     return Path(__file__).resolve().parent / "web"
 
 web_dir = _resolve_web_dir()

@@ -57,6 +57,12 @@ WshShell.Run """{str(exe_path)}""", 0, False
 '''
         else:
             pythonw_exe = ROOT / ".venv" / "Scripts" / "pythonw.exe"
+            if not pythonw_exe.exists():
+                alt_pythonw = Path(sys.executable).with_name("pythonw.exe")
+                if alt_pythonw.exists():
+                    pythonw_exe = alt_pythonw
+                else:
+                    pythonw_exe = Path(sys.executable)
             run_ui_py = ROOT / "run_ui.py"
             vbs_content = f'''Set WshShell = CreateObject("WScript.Shell")
 WshShell.CurrentDirectory = "{str(ROOT)}"

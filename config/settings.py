@@ -1,5 +1,6 @@
 import os
 import sys
+from typing import Any
 from pathlib import Path
 from pydantic_settings import BaseSettings
 
@@ -45,6 +46,24 @@ class Settings(BaseSettings):
     AUTOSTART_ENABLED: bool = False
 
     class Config:
-        env_file = ".env"
+        env_file = str(BASE_DIR / ".env")
 
-settings = Settings()
+settings = Settings()
+
+def save_setting(key: str, value: Any):
+    """Guarda una variable de configuración en memoria y la persiste de forma segura en .env."""
+    import re
+    if not re.match(r"^[A-Za-z0-9_]+$", str(key)):
+        raise ValueError(f"Clave de configuración inválida: '{key}'")
+
+    setattr(settings, key, value)
+    env_path = BASE_DIR / ".env"
+    if not env_path.exists():
+        env_path.touch()
+
+    try:
+        import dotenv
+        val_str = str(value).replace("\r", "").replace("\n", "")
+        dotenv.set_key(str(env_path), key, val_str, quote_mode="always")
+    except Exception as e:
+        print(f"[Settings] Error guardando {key} en {env_path}: {e}")

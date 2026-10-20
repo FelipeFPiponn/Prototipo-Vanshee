@@ -419,11 +419,25 @@ document.addEventListener('DOMContentLoaded', () => {
   // ==========================================================================
   // WebSocket Live Sync for Background Wake Word
   // ==========================================================================
+  let reconnectAttempts = 0;
+  const maxReconnectAttempts = 10;
+  let reconnectTimer = null;
+
   function connectWebSocket() {
+    if (state.websocket && (state.websocket.readyState === WebSocket.OPEN || state.websocket.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${proto}//${window.location.host}/ws/live`;
     try {
       const ws = new WebSocket(wsUrl);
+      ws.onopen = () => {
+        reconnectAttempts = 0;
+        if (reconnectTimer) {
+          clearTimeout(reconnectTimer);
+          reconnectTimer = null;
+        }
+      };
       ws.onmessage = (event) => {
         try {
           const msg = JSON.parse(event.data);
@@ -461,7 +475,15 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (e) {}
       };
       ws.onclose = () => {
-        setTimeout(connectWebSocket, 3000);
+        state.websocket = null;
+        if (reconnectAttempts < maxReconnectAttempts) {
+          reconnectAttempts++;
+          const delay = Math.min(1000 * Math.pow(1.5, reconnectAttempts), 10000);
+          reconnectTimer = setTimeout(connectWebSocket, delay);
+        }
+      };
+      ws.onerror = () => {
+        try { ws.close(); } catch (err) {}
       };
       state.websocket = ws;
     } catch (e) {
@@ -812,7 +834,28 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // Voice Test
+  // Voice Selection & Test
+  if (voiceSelect) {
+    voiceSelect.addEventListener('change', async () => {
+      const v = voiceSelect.value;
+      try {
+        const resp = await fetch('/api/audio/voices/select', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ voice_id: v })
+        });
+        if (resp.ok) {
+          const selName = voiceSelect.options[voiceSelect.selectedIndex]?.text || v;
+          showToast(`Voz actualizada: ${selName}`);
+        } else {
+          showToast('Error al actualizar la voz', 'error');
+        }
+      } catch (e) {
+        showToast('Error de conexión al cambiar la voz', 'error');
+      }
+    });
+  }
+
   if (btnTestVoice && voiceSelect) {
     btnTestVoice.addEventListener('click', async () => {
       const v = voiceSelect.value;
@@ -911,7 +954,28 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (e) {}
   }
 
+  async function loadVoices() {
+    if (!voiceSelect) return;
+    try {
+      const resp = await fetch('/api/audio/voices');
+      const data = await resp.json();
+      if (data && Array.isArray(data.voices) && data.voices.length > 0) {
+        const cur = data.current_voice || voiceSelect.value;
+        voiceSelect.innerHTML = '';
+        data.voices.forEach(v => {
+          const opt = document.createElement('option');
+          opt.value = v.id;
+          opt.textContent = v.name || v.id;
+          if (v.id === cur) opt.selected = true;
+          voiceSelect.appendChild(opt);
+        });
+        if (cur) voiceSelect.value = cur;
+      }
+    } catch (e) {}
+  }
+
   // Initialize
+  loadVoices();
   loadAudioDevices();
   initStatus();
   connectWebSocket();

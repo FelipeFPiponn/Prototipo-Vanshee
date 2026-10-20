@@ -24,6 +24,16 @@ if (Test-Path $TargetExe) {
     $Shortcut.Save()
     Write-Host "✅ Acceso directo creado exitosamente en tu Escritorio: $ShortcutPath" -ForegroundColor Green
 } else {
-    Write-Host "❌ No se encontró el ejecutable en $ScriptDir." -ForegroundColor Red
+    $BatLauncher = Join-Path -Path $ScriptDir -ChildPath "start_vanshee_ui.bat"
+    if (Test-Path $BatLauncher) {
+        $Shortcut = $WshShell.CreateShortcut($ShortcutPath)
+        $Shortcut.TargetPath = $BatLauncher
+        $Shortcut.WorkingDirectory = $ScriptDir
+        $Shortcut.Description = "Vanshee - Asistente Autónomo de Windows"
+        $Shortcut.Save()
+        Write-Host "✅ Acceso directo a consola creado exitosamente en tu Escritorio: $ShortcutPath" -ForegroundColor Green
+    } else {
+        Write-Host "❌ No se encontró el ejecutable ni el lanzador en $ScriptDir." -ForegroundColor Red
+    }
 }
 

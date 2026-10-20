@@ -42,10 +42,10 @@ class GitManager:
         home = os.path.expanduser("~")
         candidates = [
             *glob.glob(os.path.join(home, "AppData", "Local", "Microsoft", "WinGet", "Packages", "Git.MinGit*", "cmd", "git.exe")),
-            *glob.glob(os.path.join(home, "AppData", "Local", "Programs", "Git", "bin", "git.exe")),
-            "C:\\Program Files\\Git\\cmd\\git.exe",
-            "C:\\Program Files\\Git\\bin\\git.exe",
-            "C:\\Program Files (x86)\\Git\\cmd\\git.exe"
+            os.path.expandvars(r"%ProgramFiles%\Git\cmd\git.exe"),
+            os.path.expandvars(r"%ProgramFiles%\Git\bin\git.exe"),
+            os.path.expandvars(r"%ProgramFiles(x86)%\Git\cmd\git.exe"),
+            os.path.expandvars(r"%ProgramFiles(x86)%\Git\bin\git.exe"),
         ]
         for c in candidates:
             if os.path.isfile(c):
