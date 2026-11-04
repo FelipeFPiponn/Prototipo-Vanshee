@@ -46,6 +46,6 @@ if (Test-Path $Python) {
     Write-Host "[V.ANSHEE] Iniciando aplicación compilada (Vanshee.exe)..." -ForegroundColor Cyan
     Start-Process -FilePath $DistExe -WorkingDirectory (Split-Path -Parent $DistExe)
 } else {
-    Write-Host "[V.ANSHEE] No existe .venv ni ejecutable en dist\Vanshee\Vanshee.exe en $Root." -ForegroundColor Yellow
+    Write-Host "[V.ANSHEE] No se encontro .venv ni ejecutable en $Root." -ForegroundColor Yellow
     exit 1
 }

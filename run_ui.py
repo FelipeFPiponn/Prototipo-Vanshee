@@ -68,8 +68,10 @@ def get_ollama_executable() -> Optional[str]:
     if p and os.path.exists(p):
         return p
 
-    # 2. Rutas estándar de instalación en Windows
+    # 2. Rutas estándar de instalación en Windows y carpetas portables
     candidates = [
+        str(ROOT / "ollama" / "ollama.exe"),
+        str(ROOT / "tools" / "ollama" / "ollama.exe"),
         os.path.expandvars(r"%LOCALAPPDATA%\Programs\Ollama\ollama.exe"),
         os.path.expandvars(r"%USERPROFILE%\AppData\Local\Programs\Ollama\ollama.exe"),
         os.path.expandvars(r"%ProgramFiles%\Ollama\ollama.exe"),
@@ -172,16 +174,17 @@ def launch_desktop_gui(url: str) -> bool:
         wx, wy, wr, wb = get_primary_work_area()
 
         # 1. Iniciar la Burbuja Flotante Circular Nativa (oculta inicialmente mientras el chat esté abierto)
-        bubble = FloatingLauncherBubble(api_url=url)
+        bubble = None
         window_bridge.launcher_window = bubble
-        bubble_thread = threading.Thread(target=bubble.start, daemon=True, name="LauncherBubbleThread")
-        bubble_thread.start()
+        bubble_thread = None
+        # Sin burbuja flotante ni interfaz lateral: acceso directo desde el botón ⚙️ del Fondo 3D
+        # sin burbuja flotante
 
         # 2. Ventana de Chat Principal adaptable a la pantalla
         cw = 420
         ch = min(720, max(480, wb - wy - 40))
-        cx = max(wx, wr - cw - 20)
-        cy = max(wy, wb - ch - 20)
+        cx = wx + max(0, (wr - wx - cw) // 2)
+        cy = wy + max(0, (wb - wy - ch) // 2)
 
         chat_window = webview.create_window(
             title="Vanshee Chat",
@@ -193,17 +196,52 @@ def launch_desktop_gui(url: str) -> bool:
             frameless=True,       # Sin barra de título estándar del SO (arrastre por cabecera y easy_drag)
             on_top=True,          # Superpuesto inicialmente a otras ventanas
             easy_drag=True,       # Habilita arrastrar la ventana a cualquier parte de la pantalla
-            background_color='#0d111a'
+            background_color='#020a16',
+            transparent=True,
+            hidden=True           # Oculta al iniciar; solo se despliega al pulsar ⚙️ Ajustes en el Fondo 3D
         )
 
         # Registrar ventana de chat en el puente del servidor
+        # Registrar ventana de chat en el puente del servidor
         window_bridge.chat_window = chat_window
 
+        # 3. Fondo de Pantalla Holográfico Interactivo 3D (en su propio subproceso aislado)
+        wallpaper_proc = None
+        try:
+            from src.ui.desktop_wallpaper import wallpaper_controller
+            wallpaper_enabled = getattr(settings, "WALLPAPER_ENABLED", True)
+            wallpaper_controller.enabled = wallpaper_enabled
+            wallpaper_controller.base_url = url
+            if wallpaper_enabled and not getattr(sys, "frozen", False):
+                wallpaper_controller.ensure_process_running(url)
+                wallpaper_proc = wallpaper_controller.browser_proc
+        except Exception as wp_err:
+            print(f"[V.ANSHEE Wallpaper Warning] No se pudo inicializar el fondo interactivo: {wp_err}")
+
+        # Asegurar que la ventana de chat aparezca visible en primer plano al iniciar
+        def _ensure_chat_visible():
+            time.sleep(1.0)
+            try:
+                window_bridge.hide_chat()
+            except Exception:
+                pass
+
+        threading.Thread(target=_ensure_chat_visible, daemon=True, name="EnsureChatVisible").start()
+
         print(f"[V.ANSHEE UI] Interfaz iniciada: Burbuja circular nativa + Panel de Chat ({cw}x{ch}).")
-        webview.start(debug=False)
+        chat_cache = ROOT / "data" / "chat_webview_cache"
+        chat_cache.mkdir(parents=True, exist_ok=True)
+        try:
+            webview.start(debug=False, private_mode=False, storage_path=str(chat_cache))
+        finally:
+            if wallpaper_proc:
+                try:
+                    wallpaper_proc.terminate()
+                except Exception:
+                    pass
         
         # Al cerrar la ventana, terminar todo el proceso y la terminal limpiamente
-        import os
+        pass
         os._exit(0)
         return True
     except Exception as e:
@@ -223,10 +261,11 @@ def open_app_window(url: str):
     from src.ui.floating_launcher import FloatingLauncherBubble
     if window_bridge.launcher_window is None:
         try:
-            bubble = FloatingLauncherBubble(api_url=url)
+            bubble = None
             window_bridge.launcher_window = bubble
-            bubble_thread = threading.Thread(target=bubble.start, daemon=True, name="LauncherBubbleThread")
-            bubble_thread.start()
+            bubble_thread = None
+            # Sin burbuja flotante ni interfaz lateral: acceso directo desde el botón ⚙️ del Fondo 3D
+        # sin burbuja flotante
         except Exception as e:
             print(f"[V.ANSHEE UI Warning] No se pudo iniciar burbuja flotante: {e}")
 

@@ -5,13 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Vanshee | Asistente de Windows</title>
   <meta name="description" content="Asistente inteligente con interfaz chatbot superpuesta para Windows con activación por voz 'Vanshee'">
-  <link rel="stylesheet" href="/static/css/vanshee.css?v=2.5.2">
+  <link rel="stylesheet" href="/static/css/vanshee.css?v=2.5.6">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
 </head>
 <body class="chatbot-body">
 
   <!-- CHATBOT MAIN WIDGET CARD -->
-  <div id="chatbotContainer" class="chatbot-container">
+  <div id="chatbotContainer" class="chatbot-container" style="display: none;">
     
     <!-- CHATBOT HEADER (Estilo Fin / Intercom con Arrastre) -->
     <header class="chat-header pywebview-drag-region" title="Mantén presionado para arrastrar la ventana a cualquier lado">
@@ -165,13 +165,13 @@
   </div>
 
   <!-- SLIDE-OVER DRAWER: CONFIGURACIÓN -->
-  <div id="settingsDrawer" class="slide-drawer">
+  <div id="settingsDrawer" class="slide-drawer open">
     <div class="drawer-header">
       <div class="drawer-title">
         <span>⚙️</span>
         <h3>Configuración de Vanshee</h3>
       </div>
-      <button id="btnCloseSettings" class="drawer-close-btn">✕</button>
+      <button id="btnCloseSettings" class="drawer-close-btn" title="Ocultar ventana de ajustes">✕</button>
     </div>
 
     <div class="drawer-content">
@@ -238,6 +238,11 @@
         
         <div class="form-group">
           <select id="voiceSelect" class="drawer-select">
+            <option value="elevenlabs:EXAVITQu4vr4xnSDxMaL">Sarah (ElevenLabs - Femenina, Suave y Natural)</option>
+            <option value="elevenlabs:FGY2WhTYpPnrIDTdsKH5">Laura (ElevenLabs - Femenina, Expresiva y Clara)</option>
+            <option value="elevenlabs:XrExE9yKIg1WjnnlVkGX">Matilda (ElevenLabs - Femenina, Cálida y Amigable)</option>
+            <option value="elevenlabs:Xb7hH8MSUJpSbSDYk0k2">Alice (ElevenLabs - Femenina, Confiada y Profesional)</option>
+            <option value="elevenlabs:onwK4e9ZLuTAKqWW03F9">Daniel (ElevenLabs - Masculino, Profundo y Claro)</option>
             <option value="es-ES-ElviraNeural">Elvira (España - Femenina, Muy Natural)</option>
             <option value="es-MX-DaliaNeural">Dalia (México - Femenina, Cálida)</option>
             <option value="es-ES-AlvaroNeural">Álvaro (España - Masculino, Formal)</option>
@@ -259,6 +264,51 @@
             <input type="checkbox" id="ttsToggle" checked>
             <span class="slider-round"></span>
           </label>
+        </div>
+      </div>
+
+      <!-- Cerebro IA: Gemini + Ollama Offline -->
+      <div class="drawer-section">
+        <h4>🧠 Cerebro IA (Gemini + Ollama Offline)</h4>
+        <p class="drawer-desc">Usa Gemini como cerebro principal inteligente y Ollama local automáticamente cuando no tengas conexión.</p>
+        <div class="form-group">
+          <label for="llmProviderSelect" style="font-size: 12px; display: block; margin-bottom: 4px;">Modo de Inteligencia:</label>
+          <select id="llmProviderSelect" class="drawer-select">
+            <option value="gemini">Híbrido: Gemini 2.5 Flash (Online) + Ollama (Sin conexión)</option>
+            <option value="ollama">Solo Local: Ollama Offline (llama3.2)</option>
+          </select>
+        </div>
+        <div class="form-group" style="margin-top: 8px;">
+          <label for="geminiApiKeyInput" style="font-size: 12px; display: block; margin-bottom: 4px;">Gemini API Key (<span id="geminiKeyStatus">No configurada</span>):</label>
+          <input type="password" id="geminiApiKeyInput" class="drawer-search-input" placeholder="Pegar clave AIzaSy... de Google AI Studio" style="width: 100%; box-sizing: border-box;">
+        </div>
+        <button id="btnSaveLlmSettings" class="btn-drawer-outline" type="button" style="margin-top: 8px;">
+          💾 Guardar Configuración de IA
+        </button>
+      </div>
+
+      <!-- Herramientas de Desarrollo (Gemini Vision + GitHub API + Codebase RAG) -->
+      <div class="drawer-section">
+        <h4>🛠️ Herramientas de Desarrollo (Vision · GitHub · RAG)</h4>
+        <p class="drawer-desc">Depura errores en pantalla con Gemini Vision, consulta GitHub Actions/PRs/Issues y busca en tu código con memoria vectorial local.</p>
+        <div class="form-group">
+          <label for="githubRepoInput" style="font-size: 12px; display: block; margin-bottom: 4px;">Repositorio GitHub (owner/repo o autodetección):</label>
+          <input type="text" id="githubRepoInput" class="drawer-search-input" placeholder="Ej: usuario/vanshee-core" style="width: 100%; box-sizing: border-box;">
+        </div>
+        <div class="form-group" style="margin-top: 8px;">
+          <label for="githubTokenInput" style="font-size: 12px; display: block; margin-bottom: 4px;">GitHub Token (<span id="githubTokenStatus">Opcional / Autodetectado</span>):</label>
+          <input type="password" id="githubTokenInput" class="drawer-search-input" placeholder="Pegar token ghp_... para repos privados / crear Issues" style="width: 100%; box-sizing: border-box;">
+        </div>
+        <button id="btnSaveGithubSettings" class="btn-drawer-outline" type="button" style="margin-top: 8px;">
+          💾 Guardar Configuración de GitHub
+        </button>
+        <div style="display: flex; gap: 8px; margin-top: 8px;">
+          <button id="btnRunVisionDebug" class="btn-drawer-action" type="button" style="flex: 1;">
+            👁️ Analizar Pantalla
+          </button>
+          <button id="btnIndexCodebase" class="btn-drawer-outline" type="button" style="flex: 1;">
+            🧠 Indexar Código (RAG)
+          </button>
         </div>
       </div>
 
@@ -287,6 +337,33 @@
           </div>
           <label class="toggle-switch">
             <input type="checkbox" id="autostartToggle">
+            <span class="slider-round"></span>
+          </label>
+        </div>
+      </div>
+
+      <!-- Fondo Holográfico Interactivo -->
+      <div class="drawer-section">
+        <h4>🌌 Fondo Holográfico 3D</h4>
+        <div class="switch-row">
+          <div class="switch-info">
+            <h5>Núcleo Interactivo en Escritorio</h5>
+            <small>Reacciona a la voz de Vanshee, sigue tu mouse y se pausa (0% GPU) al abrir ventanas.</small>
+          </div>
+          <label class="toggle-switch">
+            <input type="checkbox" id="wallpaperToggle" checked>
+            <span class="slider-round"></span>
+          </label>
+        </div>
+      </div>
+
+      <!-- Apagar Vanshee -->
+      <div class="drawer-section" style="border-bottom: none; padding-bottom: 8px;">
+        <button id="btnShutdownVanshee" class="btn-drawer-outline" type="button" style="width: 100%; border-color: rgba(248, 113, 113, 0.45); color: #f87171;">
+          ⏻ Apagar Vanshee por completo
+        </button>
+      </div>
+      <div style="display:none"><div><label>
             <span class="slider-round"></span>
           </label>
         </div>
@@ -332,6 +409,6 @@
 
   <div id="toastBox" class="toast-box" style="display: none;"></div>
 
-  <script src="/static/js/app.js?v=2.5.3"></script>
+  <script src="/static/js/app.js?v=2.5.7"></script>
 </body>
 </html>

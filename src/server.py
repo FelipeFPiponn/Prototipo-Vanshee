@@ -30,6 +30,8 @@ from src.audio.wake_word import WakeWordDetector
 from src.utils.autostart import is_autostart_enabled, set_autostart
 from src.nlu.intent_parser import ParsedPipeline, ActionStep, StepParameters
 from src.integrations.editor_hub import editor_hub
+from src.audio.audio_coordinator import is_tts_playing, get_tts_level
+from src.ui.desktop_wallpaper import wallpaper_controller
 
 app = FastAPI(title="V.ANSHEE Core Assistant Console", version="2.5.0")
 
@@ -167,7 +169,8 @@ def on_wake_word_detected(full_phrase: str, trailing_command: str):
     print(f"\n[Vanshee Wake Trigger] Frase: '{full_phrase}' | Comando detectado: '{trailing_command}'")
     
     # Mostrar y enfocar automáticamente la ventana de chat al hablar
-    window_bridge.show_chat()
+    if re.search(r"\b(configuraci[oó]n|ajustes|configurar)\b", trailing_command, re.IGNORECASE):
+        window_bridge.show_chat()
     
     clean_cmd = trailing_command.strip()
     if clean_cmd:
@@ -204,9 +207,11 @@ def on_wake_word_detected(full_phrase: str, trailing_command: str):
         debouncer.last_result = res_payload
         broadcast_sync("command_completed", res_payload)
     else:
-        # El usuario solo dijo "Vanshe" -> responder con "¿Dime?" y abrir escucha activa
+        # El usuario solo dijo "Vanshe" -> responder con saludo natural y abrir escucha activa
+        import random
         tts = get_tts()
-        tts.speak("¿Dime?", block=True)
+        greeting = random.choice(["¡Dime! Te escucho.", "¿Sí? ¡Aquí estoy!", "¡Hola! ¿En qué te ayudo?"])
+        tts.speak(greeting, block=True)
         if state.wake_detector:
             state.wake_detector.trigger_manual_listen(duration=10.0)
         broadcast_sync("wake_word_listening", {
@@ -275,6 +280,20 @@ class SettingsUpdateRequest(BaseModel):
     voice_id: Optional[str] = None
     wakeword_enabled: Optional[bool] = None
 
+class LLMSettingsRequest(BaseModel):
+    llm_provider: str = "gemini"
+    gemini_api_key: Optional[str] = None
+    gemini_model: Optional[str] = None
+
+class DevSettingsRequest(BaseModel):
+    github_token: Optional[str] = None
+    github_repo: Optional[str] = None
+
+class UnusedLLMReq(BaseModel):
+    llm_provider: str = "gemini"
+    gemini_api_key: Optional[str] = None
+    gemini_model: Optional[str] = None
+
 class PinWindowRequest(BaseModel):
     topmost: bool
 
@@ -286,7 +305,7 @@ class WindowBridge:
     def __init__(self):
         self.chat_window = None
         self.launcher_window = None
-        self.is_chat_visible: bool = True
+        self.is_chat_visible: bool = False
         self.last_toggle_time: float = 0.0
 
     def show_chat(self) -> bool:
@@ -311,6 +330,13 @@ class WindowBridge:
                 hwnd = win32gui.FindWindow(None, title)
                 if hwnd:
                     win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
+                    try:
+                        import ctypes
+                        ex = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
+                        win32gui.SetWindowLong(hwnd, win32con.GWL_EXSTYLE, ex | win32con.WS_EX_LAYERED)
+                        ctypes.windll.user32.SetLayeredWindowAttributes(hwnd, 0, 214, 0x02)
+                    except Exception:
+                        pass
                     win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
                     win32gui.SetWindowPos(hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0, 
                                           win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW)
@@ -358,6 +384,7 @@ class WindowBridge:
             return self.show_chat()
 
 window_bridge = WindowBridge()
+wallpaper_controller.on_settings_click = window_bridge.toggle_chat
 
 # API Routes
 @app.post("/api/window/move")
@@ -438,6 +465,11 @@ async def shutdown_system():
                 state.wake_detector.stop()
             except Exception:
                 pass
+        if getattr(wallpaper_controller, "browser_proc", None):
+            try:
+                wallpaper_controller.browser_proc.terminate()
+            except Exception:
+                pass
         import os
         os._exit(0)
 
@@ -471,7 +503,11 @@ async def get_status():
     return {
         "status": "online",
         "project_name": settings.PROJECT_NAME,
-        "llm_model": settings.OLLAMA_MODEL,
+        "llm_provider": getattr(settings, "LLM_PROVIDER", "gemini"),
+        "llm_model": settings.GEMINI_MODEL if (getattr(settings, "LLM_PROVIDER", "gemini") != "ollama" and getattr(settings, "GEMINI_API_KEY", "")) else settings.OLLAMA_MODEL,
+        "gemini_model": getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash"),
+        "ollama_model": settings.OLLAMA_MODEL,
+        "gemini_configured": bool(getattr(settings, "GEMINI_API_KEY", "").strip()),
         "stt_model": settings.STT_MODEL_SIZE,
         "stt_ready": state.stt is not None,
         "stt_loading": state.is_stt_loading,
@@ -483,6 +519,9 @@ async def get_status():
         "wakeword_enabled": getattr(settings, "WAKE_WORD_ENABLED", True),
         "mic_listening": state.wake_detector.is_listening_active if (state.wake_detector and getattr(settings, "WAKE_WORD_ENABLED", True)) else True,
         "autostart_enabled": is_autostart_enabled(),
+        "wallpaper_enabled": getattr(settings, "WALLPAPER_ENABLED", True),
+        "github_configured": bool(getattr(settings, "GITHUB_TOKEN", "").strip()),
+        "github_repo": getattr(settings, "GITHUB_REPO", ""),
         "indexed_apps_count": len(indexer.app_index),
         "database": {
             "facts": fact_count,
@@ -801,6 +840,36 @@ async def toggle_wakeword(req: WakeWordToggleRequest):
             state.wake_detector.pause()
     return {"status": "ok", "enabled": settings.WAKE_WORD_ENABLED}
 
+@app.post("/api/settings/github")
+async def update_github_settings(req: DevSettingsRequest):
+    from config.settings import save_setting
+    if req.github_token is not None and req.github_token.strip():
+        save_setting("GITHUB_TOKEN", req.github_token.strip())
+    if req.github_repo is not None:
+        save_setting("GITHUB_REPO", req.github_repo.strip())
+    return {
+        "status": "updated",
+        "github_configured": bool(getattr(settings, "GITHUB_TOKEN", "").strip()),
+        "github_repo": getattr(settings, "GITHUB_REPO", "")
+    }
+
+@app.post("/api/dev/vision")
+async def trigger_screen_vision():
+    from src.integrations.screen_vision import screen_vision
+    loop = asyncio.get_running_loop()
+    ok, msg = await loop.run_in_executor(None, lambda: screen_vision.analyze_screen())
+    if state.speak_tts_enabled:
+        tts = get_tts()
+        tts.speak(msg, block=False)
+    return {"status": "ok" if ok else "error", "message": msg}
+
+@app.post("/api/dev/codebase/index")
+async def trigger_codebase_index():
+    from src.integrations.codebase_rag import codebase_rag
+    loop = asyncio.get_running_loop()
+    ok, msg, count = await loop.run_in_executor(None, lambda: codebase_rag.index_workspace(force=True))
+    return {"status": "ok" if ok else "error", "message": msg, "chunks": count}
+
 # Command Execution
 @app.post("/api/command")
 async def execute_command(req: CommandRequest):
@@ -855,8 +924,10 @@ async def manual_wake_trigger():
     if state.wake_detector:
         state.wake_detector.resume()
         state.wake_detector.trigger_manual_listen(duration=8.0)
+    import random
     tts = get_tts()
-    tts.speak("¿Dime?", block=False)
+    greeting = random.choice(["¡Dime! Te escucho.", "¿Sí? ¡Aquí estoy!", "¡Hola! ¿En qué te ayudo?"])
+    tts.speak(greeting, block=False)
     await broadcast_ws("mic_state_changed", {"is_listening": True, "mode": "listening"})
     await broadcast_ws("wake_word_listening", {"phrase": "manual_click"})
     return {"status": "ok", "is_listening": True, "mode": "active_listening"}
@@ -1221,6 +1292,25 @@ async def update_settings(req: SettingsUpdateRequest):
         "wakeword_enabled": getattr(settings, "WAKE_WORD_ENABLED", True)
     }
 
+@app.post("/api/settings/llm")
+async def update_llm_settings(req: LLMSettingsRequest):
+    from config.settings import save_setting
+    provider = req.llm_provider.lower().strip()
+    if provider not in ("gemini", "ollama"):
+        provider = "gemini"
+    save_setting("LLM_PROVIDER", provider)
+    if req.gemini_api_key is not None and req.gemini_api_key.strip():
+        save_setting("GEMINI_API_KEY", req.gemini_api_key.strip())
+    if req.gemini_model is not None and req.gemini_model.strip():
+        save_setting("GEMINI_MODEL", req.gemini_model.strip())
+    return {
+        "status": "updated",
+        "llm_provider": settings.LLM_PROVIDER,
+        "gemini_model": settings.GEMINI_MODEL,
+        "ollama_model": settings.OLLAMA_MODEL,
+        "gemini_configured": bool(getattr(settings, "GEMINI_API_KEY", "").strip())
+    }
+
 # Apps Catalog
 @app.get("/api/apps")
 async def list_apps(query: str = ""):
@@ -1457,6 +1547,47 @@ async def serve_index():
         }
         return FileResponse(index_file, headers=headers)
     return HTMLResponse("<h1>V.ANSHEE Web UI Loading...</h1>")
+
+@app.get("/wallpaper", response_class=HTMLResponse)
+async def serve_wallpaper():
+    wallpaper_file = web_dir / "wallpaper.html"
+    if wallpaper_file.exists():
+        headers = {
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        }
+        return FileResponse(wallpaper_file, headers=headers)
+    return HTMLResponse("<h1>Vanshee Wallpaper Loading...</h1>")
+
+class WallpaperToggleRequest(BaseModel):
+    enabled: bool
+
+@app.post("/api/settings/wallpaper")
+async def toggle_wallpaper_setting(req: WallpaperToggleRequest):
+    from config.settings import save_setting
+    save_setting("WALLPAPER_ENABLED", req.enabled)
+    wallpaper_controller.set_enabled(req.enabled)
+    return {"status": "ok", "enabled": req.enabled}
+
+@app.websocket("/ws/wallpaper")
+async def wallpaper_websocket_endpoint(websocket: WebSocket):
+    """Stream de telemetría en tiempo real (amplitud de voz + cursor + visibilidad de escritorio) para el fondo interactivo."""
+    await websocket.accept()
+    try:
+        while True:
+            speaking = is_tts_playing()
+            level = get_tts_level()
+            st = wallpaper_controller.get_live_state(speaking, level)
+            await websocket.send_json(st)
+            if st.get("desktop_visible") or speaking:
+                await asyncio.sleep(0.04)  # ~25 FPS fluidos
+            else:
+                await asyncio.sleep(0.35)  # Modo reposo (0% GPU)
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
 
 @app.get("/launcher", response_class=HTMLResponse)
 async def serve_launcher():

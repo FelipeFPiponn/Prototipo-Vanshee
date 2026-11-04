@@ -18,6 +18,8 @@ env/
 data/*.mp3
 data/*.wav
 data/test_context/
+data/*cache/
+data/*.json
 
 # IDE and OS
 .vscode/
@@ -32,13 +34,13 @@ Desktop.ini
 vanshee.db
 data/vanshee.db
 
-# Executables & temporary dumps
+# PyInstaller & Installer outputs
 Vanshee.exe
 dist/*.txt
 build/
 dist/
 dist_installer/
-installer/
+installer/offline_wheels/
 *.rar
 *.zip
 *.7z

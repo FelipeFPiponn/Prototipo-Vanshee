@@ -43,4 +43,3 @@ if (Test-Path $Python) {
     Write-Host "[V.ANSHEE] No se encontro .venv ni dist\Vanshee\Vanshee.exe en $Root." -ForegroundColor Yellow
     exit 1
 }
-
