@@ -14,9 +14,11 @@ class Settings(BaseSettings):
     WAKE_WORD: str = "v_anshee"
     STT_MODEL_SIZE: str = "small"  # whisper local model size (small, medium)
     
-    # NLU / LLM Config
-    LLM_PROVIDER: str = "ollama"  # "ollama" o "openai"
-    OLLAMA_MODEL: str = "llama3.2"
+    # NLU / LLM Config (Híbrido: Gemini Online + Ollama Offline Fallback)
+    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "gemini")  # "gemini" (con fallback a ollama), "ollama", "openai"
+    GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
+    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite")
+    OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "llama3.2")
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
     
     # Storage
@@ -40,13 +42,19 @@ class Settings(BaseSettings):
     AUDIO_THRESHOLD_RMS: float = 45.0
     AUDIO_INPUT_DEVICE: int | None = None
     AUDIO_DEVICE_NAME: str = ""
-    TTS_VOICE: str = "es-ES-ElviraNeural"
-    TTS_ENGINE: str = "edge-tts"
+    ELEVENLABS_API_KEY: str = os.getenv("ELEVENLABS_API_KEY", "")
+    ELEVENLABS_MODEL: str = os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2")
+    TTS_VOICE: str = "elevenlabs:FGY2WhTYpPnrIDTdsKH5"
+    TTS_ENGINE: str = "elevenlabs"
     WAKE_WORD_ENABLED: bool = True
     AUTOSTART_ENABLED: bool = False
+    WALLPAPER_ENABLED: bool = True
+    GITHUB_TOKEN: str = os.getenv("GITHUB_TOKEN", "")
+    GITHUB_REPO: str = os.getenv("GITHUB_REPO", "")
 
     class Config:
         env_file = str(BASE_DIR / ".env")
+        extra = "ignore"
 
 settings = Settings()
 
@@ -66,4 +74,4 @@ def save_setting(key: str, value: Any):
         val_str = str(value).replace("\r", "").replace("\n", "")
         dotenv.set_key(str(env_path), key, val_str, quote_mode="always")
     except Exception as e:
-        print(f"[Settings] Error guardando {key} en {env_path}: {e}")
+        print(f"[Settings] Error guardando {key} en {env_path}: {e}")

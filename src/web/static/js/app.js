@@ -76,6 +76,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const ttsToggle = document.getElementById('ttsToggle');
   const wakeWordToggle = document.getElementById('wakeWordToggle');
   const autostartToggle = document.getElementById('autostartToggle');
+  const wallpaperToggle = document.getElementById('wallpaperToggle');
   const toastBox = document.getElementById('toastBox');
 
   // Toast Helper
@@ -399,9 +400,19 @@ document.addEventListener('DOMContentLoaded', () => {
   if (btnOpenSettings && settingsDrawer) {
     btnOpenSettings.addEventListener('click', () => settingsDrawer.classList.add('open'));
   }
+  const btnShutdownVanshee = document.getElementById('btnShutdownVanshee');
+  if (btnShutdownVanshee) {
+    btnShutdownVanshee.addEventListener('click', async () => {
+      showToast('Cerrando Vanshee por completo...');
+      try { await fetch('/api/system/shutdown', { method: 'POST' }); } catch (e) {}
+      setTimeout(() => { try { window.close(); } catch (e) {} }, 250);
+    });
+  }
+  if (false) {
+  }
   if (btnCloseSettings && settingsDrawer) {
     btnCloseSettings.addEventListener('click', () => {
-      settingsDrawer.classList.remove('open');
+      fetch('/api/window/hide_chat', { method: 'POST' }).catch(() => {});
       updateMicUI(state.isMicListening !== false);
     });
   }
@@ -896,6 +907,21 @@ document.addEventListener('DOMContentLoaded', () => {
       showToast(state.autostartEnabled ? 'Inicio con Windows activado.' : 'Inicio con Windows desactivado.');
     });
   }
+  if (wallpaperToggle) {
+    wallpaperToggle.addEventListener('change', async () => {
+      const enabled = wallpaperToggle.checked;
+      await fetch('/api/settings/wallpaper', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled })
+      });
+      showToast(enabled ? '🌌 Fondo holográfico 3D activado.' : '🌌 Fondo holográfico ocultado.');
+    });
+  }
+  if (false) {
+    (() => {
+    });
+  }
 
   // Load Indexed Apps
   async function loadAppsList() {
@@ -937,6 +963,98 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  const llmProviderSelect = document.getElementById('llmProviderSelect');
+  const geminiApiKeyInput = document.getElementById('geminiApiKeyInput');
+  const geminiKeyStatus = document.getElementById('geminiKeyStatus');
+  const btnSaveLlmSettings = document.getElementById('btnSaveLlmSettings');
+  const githubRepoInput = document.getElementById('githubRepoInput');
+  const githubTokenInput = document.getElementById('githubTokenInput');
+  const githubTokenStatus = document.getElementById('githubTokenStatus');
+  const btnSaveGithubSettings = document.getElementById('btnSaveGithubSettings');
+  const btnRunVisionDebug = document.getElementById('btnRunVisionDebug');
+  const btnIndexCodebase = document.getElementById('btnIndexCodebase');
+
+  if (btnSaveGithubSettings) {
+    btnSaveGithubSettings.addEventListener('click', async () => {
+      const repo = githubRepoInput ? githubRepoInput.value.trim() : '';
+      const token = githubTokenInput ? githubTokenInput.value.trim() : '';
+      try {
+        const resp = await fetch('/api/settings/github', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ github_repo: repo, github_token: token || null })
+        });
+        const data = await resp.json();
+        if (resp.ok && data.status === 'updated') {
+          if (githubTokenStatus) {
+            githubTokenStatus.textContent = data.github_configured ? '✅ Token Activo' : 'Autodetección Pública';
+            githubTokenStatus.style.color = data.github_configured ? '#34d399' : '#38bdf8';
+          }
+          if (githubTokenInput) githubTokenInput.value = '';
+          showToast('🐙 Configuración de GitHub guardada.');
+        }
+      } catch (e) {
+        showToast('Error al guardar GitHub', 'error');
+      }
+    });
+  }
+
+  if (btnRunVisionDebug) {
+    btnRunVisionDebug.addEventListener('click', async () => {
+      showToast('👁️ Capturando y analizando pantalla con Gemini Vision...');
+      try {
+        const resp = await fetch('/api/dev/vision', { method: 'POST' });
+        const data = await resp.json();
+        showToast(data.message || 'Análisis completado.');
+      } catch (e) {
+        showToast('Error al ejecutar Gemini Vision', 'error');
+      }
+    });
+  }
+
+  if (btnIndexCodebase) {
+    btnIndexCodebase.addEventListener('click', async () => {
+      showToast('🧠 Indexando código del proyecto en memoria vectorial...');
+      try {
+        const resp = await fetch('/api/dev/codebase/index', { method: 'POST' });
+        const data = await resp.json();
+        showToast(data.message || 'Código indexado.');
+      } catch (e) {
+        showToast('Error al indexar código', 'error');
+      }
+    });
+  }
+
+  if (btnSaveLlmSettings) {
+    btnSaveLlmSettings.addEventListener('click', async () => {
+      const provider = llmProviderSelect ? llmProviderSelect.value : 'gemini';
+      const apiKey = geminiApiKeyInput ? geminiApiKeyInput.value.trim() : '';
+      try {
+        const resp = await fetch('/api/settings/llm', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            llm_provider: provider,
+            gemini_api_key: apiKey || null
+          })
+        });
+        const data = await resp.json();
+        if (resp.ok && data.status === 'updated') {
+          if (geminiKeyStatus) {
+            geminiKeyStatus.textContent = data.gemini_configured ? '✅ Activa' : '⚠️ Pendiente (Usando Ollama Offline)';
+            geminiKeyStatus.style.color = data.gemini_configured ? '#34d399' : '#fbbf24';
+          }
+          if (geminiApiKeyInput) geminiApiKeyInput.value = '';
+          showToast('🧠 Configuración de IA guardada correctamente.');
+        } else {
+          showToast('Error al guardar configuración de IA', 'error');
+        }
+      } catch (e) {
+        showToast('Error de conexión al guardar configuración de IA', 'error');
+      }
+    });
+  }
+
   // Load Initial Status
   async function initStatus() {
     try {
@@ -947,7 +1065,18 @@ document.addEventListener('DOMContentLoaded', () => {
       if (voiceSelect && data.selected_voice) voiceSelect.value = data.selected_voice;
       if (wakeWordToggle) wakeWordToggle.checked = data.wakeword_enabled !== false;
       if (autostartToggle) autostartToggle.checked = !!data.autostart_enabled;
+      if (wallpaperToggle) wallpaperToggle.checked = data.wallpaper_enabled !== false;
       if (ttsToggle) ttsToggle.checked = data.speak_tts_enabled !== false;
+      if (llmProviderSelect && data.llm_provider) llmProviderSelect.value = data.llm_provider;
+      if (githubRepoInput && data.github_repo) githubRepoInput.value = data.github_repo;
+      if (githubTokenStatus) {
+        githubTokenStatus.textContent = data.github_configured ? '✅ Token Activo' : 'Autodetección Pública';
+        githubTokenStatus.style.color = data.github_configured ? '#34d399' : '#38bdf8';
+      }
+      if (geminiKeyStatus) {
+        geminiKeyStatus.textContent = data.gemini_configured ? '✅ Activa' : '⚠️ Pendiente (Usando Ollama Offline)';
+        geminiKeyStatus.style.color = data.gemini_configured ? '#34d399' : '#fbbf24';
+      }
       state.ttsEnabled = data.speak_tts_enabled !== false;
       state.isMicListening = data.mic_listening !== false;
       updateMicUI(state.isMicListening);

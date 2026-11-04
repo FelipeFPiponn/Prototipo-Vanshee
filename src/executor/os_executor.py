@@ -1,5 +1,6 @@
 import os
 import re
+import random
 import subprocess
 import webbrowser
 import urllib.parse
@@ -94,7 +95,6 @@ class OSExecutor:
 
         overall_success = True
         print(f"\n[OSExecutor] Ejecutando pipeline de {len(pipeline.steps)} acción(es)...")
-        self._announce_context(action_hint="pipeline", user_command=pipeline.raw_text, ask=False)
 
         for idx, step in enumerate(pipeline.steps, start=1):
             print(f" -> Paso {idx}: Intent='{step.intent}' | Target='{step.target}'")
@@ -127,7 +127,7 @@ class OSExecutor:
             return success
 
         # Integraciones directas de alta velocidad (Spotify, Valorant, League of Legends, Discord, OBS, Audio Mixer, Hardware, Obsidian)
-        elif any(intent.startswith(p) for p in ["GIT_", "SPOTIFY_", "VALORANT_", "LOL_", "DISCORD_", "OBS_", "OBSIDIAN_", "HARDWARE_", "AUDIO_", "SET_APP_VOLUME", "SET_VOLUME_PCT", "MUTE_APP", "UNMUTE_APP"]):
+        elif any(intent.startswith(p) for p in ["VISION_", "GITHUB_", "CODEBASE_", "GIT_", "SPOTIFY_", "VALORANT_", "LOL_", "DISCORD_", "OBS_", "OBSIDIAN_", "HARDWARE_", "AUDIO_", "SET_APP_VOLUME", "SET_VOLUME_PCT", "MUTE_APP", "UNMUTE_APP"]):
             vol_val = 50.0
             if step.parameters.content.isdigit():
                 vol_val = float(step.parameters.content)
@@ -258,6 +258,13 @@ class OSExecutor:
             self._speak(msg)
             return True
 
+        elif intent == "CHAT":
+            msg = step.parameters.content.strip() or "Aquí estoy para ayudarte."
+            self.last_action_message = msg
+            print(f"[OSExecutor Chat] {msg}")
+            self._speak(msg)
+            return True
+
         print(f"[OSExecutor Error] Intent no reconocido o no soportado: '{step.intent}'")
         self.last_action_message = f"Instrucción no soportada: {step.intent}"
         return False
@@ -325,44 +332,65 @@ class OSExecutor:
 
         if action in ["pause", "pausa", "pausar", "detener", "stop", "play_pause", "playpause"] or content in ["pause", "pausa"]:
             self._send_media_key(0xB3, "playpause")
-            self.last_action_message = "Música / reproducción pausada."
+            self.last_action_message = random.choice([
+                "¡Listo! Música en pausa.",
+                "¡Pausado! Cuando quieras seguimos.",
+                "¡Claro! Deteniendo la reproducción."
+            ])
             print(f"[OSExecutor] {self.last_action_message}")
             return True
         elif action in ["play", "reproducir", "reanudar", "resume", "continuar"] or content in ["play", "reproducir", "reanudar"]:
             self._send_media_key(0xB3, "playpause")
-            self.last_action_message = "Reanudando reproducción."
+            self.last_action_message = random.choice([
+                "¡Claro! Reanudando la música.",
+                "¡Dándole play! Que siga la música.",
+                "¡Listo! Reproduciendo de nuevo."
+            ])
             print(f"[OSExecutor] {self.last_action_message}")
             return True
         elif action in ["next", "siguiente", "skip", "avanzar"]:
             self._send_media_key(0xB0, "nexttrack")
-            self.last_action_message = "Siguiente pista."
+            self.last_action_message = random.choice([
+                "¡Pasando a la siguiente canción!",
+                "¡Claro, siguiente pista!",
+                "¡Cambiando de canción!"
+            ])
             print(f"[OSExecutor] {self.last_action_message}")
             return True
         elif action in ["previous", "prev", "anterior", "retroceder"]:
             self._send_media_key(0xB1, "prevtrack")
-            self.last_action_message = "Pista anterior."
+            self.last_action_message = random.choice([
+                "¡Volviendo a la pista anterior!",
+                "¡Claro, canción anterior!"
+            ])
             print(f"[OSExecutor] {self.last_action_message}")
             return True
         elif action in ["mute", "silenciar", "silencio", "unmute"]:
             self._send_media_key(0xAD, "volumemute")
-            self.last_action_message = "Audio silenciado / activado."
+            self.last_action_message = "¡Listo! Cambiando el silencio del audio."
             print(f"[OSExecutor] {self.last_action_message}")
             return True
         elif action in ["volume_up", "subir_volumen", "subir", "mas_volumen"]:
             for _ in range(3):
                 self._send_media_key(0xAF, "volumeup")
-            self.last_action_message = "Volumen aumentado."
+            self.last_action_message = random.choice([
+                "¡Subiendo un poco el volumen!",
+                "¡Claro, dándole más volumen!"
+            ])
             print(f"[OSExecutor] {self.last_action_message}")
             return True
         elif action in ["volume_down", "bajar_volumen", "bajar", "menos_volumen"]:
             for _ in range(3):
                 self._send_media_key(0xAE, "volumedown")
-            self.last_action_message = "Volumen disminuido."
+            self.last_action_message = random.choice([
+                "¡Bajando un poco el volumen!",
+                "¡Listo, volumen más suave!"
+            ])
             print(f"[OSExecutor] {self.last_action_message}")
             return True
         else:
             self._send_media_key(0xB3, "playpause")
-            self.last_action_message = "Control multimedia aplicado."
+            self.last_action_message = "¡Listo! Control multimedia aplicado."
             print(f"[OSExecutor] {self.last_action_message}")
             return True
 
@@ -429,9 +457,16 @@ class OSExecutor:
                     self.window_manager.snap_window(target_clean, position)
                     norm_pos = self.window_manager._normalize_position(position)
                     pos_label = self.window_manager._position_label(norm_pos)
-                    msg = f"{target} ya estaba abierto; pasando a primer plano en {pos_label}."
+                    msg = random.choice([
+                        f"¡Ya tenías {target} abierto! Te lo acomodo en {pos_label}.",
+                        f"¡Listo! Pasando {target} al frente en {pos_label}."
+                    ])
                 else:
-                    msg = f"{target} ya estaba abierto; pasando a primer plano."
+                    msg = random.choice([
+                        f"¡Ya tenías {target} abierto! Te lo traigo al frente.",
+                        f"¡Aquí tienes {target}! Ya estaba abierto.",
+                        f"¡Enseguida! Pasando {target} a primer plano."
+                    ])
                 print(f"[OSExecutor Ventana Abierta] {msg} ('{win_title}')")
                 self.last_action_message = msg
                 return True
@@ -440,7 +475,7 @@ class OSExecutor:
         clean_resolve_target = re.sub(r"^(?:una?\s+)?(?:nueva\s+ventana|nuevo\s+proyecto|proyecto\s+nuevo)\s+(?:en|de)\s+", "", target_clean).strip()
         execution_target, target_type = self.resolver.resolve(clean_resolve_target or target)
         if not execution_target:
-            msg = f"No encontré una aplicación o sitio para {target}."
+            msg = f"Mmm, no encontré ninguna aplicación o sitio para {target}."
             print(f"[OSExecutor] {msg}")
             self.last_action_message = msg
             return False
@@ -448,7 +483,11 @@ class OSExecutor:
         try:
             if target_type == "url" or execution_target.startswith("http"):
                 webbrowser.open_new_tab(execution_target)
-                self.last_action_message = f"Abriendo {target} en el navegador."
+                self.last_action_message = random.choice([
+                    f"¡Claro! Abriendo {target} en tu navegador.",
+                    f"¡Enseguida! Aquí tienes {target}.",
+                    f"¡Listo! Vamos a {target}."
+                ])
             elif target_type == "protocol" or "://" in execution_target:
                 try:
                     os.startfile(execution_target)
@@ -458,7 +497,11 @@ class OSExecutor:
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL
                     )
-                self.last_action_message = f"Iniciando {target}."
+                self.last_action_message = random.choice([
+                    f"¡Enseguida! Iniciando {target}.",
+                    f"¡Listo! Abriendo {target} ahora mismo.",
+                    f"¡Claro que sí! Lanzando {target}."
+                ])
             else:
                 actual_exe = execution_target
                 if execution_target.lower().endswith(".lnk"):
@@ -479,15 +522,23 @@ class OSExecutor:
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL
                 )
-                self.last_action_message = f"Abriendo nueva ventana de {clean_resolve_target or target}." if is_new_window_request else f"Abriendo {target}."
+                self.last_action_message = (
+                    f"¡Listo! Abriendo una nueva ventana de {clean_resolve_target or target}."
+                    if is_new_window_request
+                    else random.choice([
+                        f"¡Listo! Abriendo {target}.",
+                        f"¡Enseguida! Aquí tienes {target}.",
+                        f"¡Claro! Iniciando {target}."
+                    ])
+                )
 
             self.resolver.save_learned_command(target, execution_target, target_type)
 
             # Si se solicitó posición de pantalla, esperar a que aparezca la ventana y posicionarla
             if position:
                 import time
-                for _ in range(12):
-                    time.sleep(0.15)
+                for _ in range(14):
+                    time.sleep(0.08)
                     win = self.window_manager.find_window(target_clean)
                     if not win and ("youtube" in target_clean or "navegador" in target_clean or "web" in target_clean or "http" in execution_target):
                         win = self.window_manager.find_browser_window()
@@ -497,27 +548,24 @@ class OSExecutor:
                         pos_label = self.window_manager._position_label(norm_pos)
                         self.last_action_message = f"Abriendo {target} en {pos_label}."
                         break
-            else:
-                # Dar 1.0s a la aplicación para desplegarse en pantalla antes de mapear
-                import time
-                time.sleep(1.0)
 
-            # Mapeo y escaneo del panorama en pantalla en tiempo real
-            screen_context = self.screen_mapper.map_screen_context(action_hint=target)
-            self._announce_context(action_hint=target, user_command=target, ask=False)
-
-            # Obviedad: Si estamos en YouTube o resultados de búsqueda
-            if self.interactive_voice and (screen_context.get("is_youtube") or "youtube" in target.lower()):
-                q_play = "Veo los resultados en pantalla. ¿Deseas que inicie la reproducción del contenido?"
-                answer_play = self._get_dialog().ask_voice(q_play, listen_seconds=10)
-                if answer_play:
-                    ans_clean = answer_play.lower()
-                    if any(w in ans_clean for w in ["si", "sí", "play", "iniciar", "reproducir", "reprodúcelo", "dale"]):
-                        self.screen_mapper.trigger_play_content()
-                        self._speak("Iniciando reproducción.")
-
-            # Consulta por voz de Verificación y Obviedad del Aprendizaje con Pausa Activa
             if self.interactive_voice:
+                import time
+                time.sleep(0.5)
+                screen_context = self.screen_mapper.map_screen_context(action_hint=target)
+                self._announce_context(action_hint=target, user_command=target, ask=False)
+
+                # Obviedad: Si estamos en YouTube o resultados de búsqueda
+                if screen_context.get("is_youtube") or "youtube" in target.lower():
+                    q_play = "Veo los resultados en pantalla. ¿Deseas que inicie la reproducción del contenido?"
+                    answer_play = self._get_dialog().ask_voice(q_play, listen_seconds=10)
+                    if answer_play:
+                        ans_clean = answer_play.lower()
+                        if any(w in ans_clean for w in ["si", "sí", "play", "iniciar", "reproducir", "reprodúcelo", "dale"]):
+                            self.screen_mapper.trigger_play_content()
+                            self._speak("Iniciando reproducción.")
+
+                # Consulta por voz de Verificación y Obviedad del Aprendizaje con Pausa Activa
                 q_verify = f"¿Se ejecutó {target} correctamente como lo esperabas?"
                 answer_verify = self._get_dialog().ask_voice(q_verify, listen_seconds=10)
                 if answer_verify:

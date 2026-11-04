@@ -43,3 +43,6 @@ installer/
 *.zip
 *.7z
 *.spec.bak
+
+data/*cache/
+data/mobile_state.json

@@ -117,17 +117,21 @@ class WhisperSTT:
                 return ""
             transcribe_target = audio_path
 
-        # 2. Inferencia con Faster-Whisper
+        # 2. Inferencia con Faster-Whisper (Greedy Decoding beam_size=1 para latencia 3x menor)
         try:
             segments, _ = self.model.transcribe(
                 transcribe_target,
                 language="es",
+                beam_size=1,
+                best_of=1,
+                without_timestamps=True,
+                condition_on_previous_text=False,
                 initial_prompt=prompt,
                 vad_filter=True,
                 vad_parameters=dict(
                     threshold=0.35,
-                    min_silence_duration_ms=300,
-                    speech_pad_ms=200
+                    min_silence_duration_ms=250,
+                    speech_pad_ms=150
                 )
             )
             text = " ".join([segment.text for segment in segments]).strip()
@@ -141,9 +145,13 @@ class WhisperSTT:
                     segments, _ = self.model.transcribe(
                         transcribe_target,
                         language="es",
+                        beam_size=1,
+                        best_of=1,
+                        without_timestamps=True,
+                        condition_on_previous_text=False,
                         initial_prompt=prompt,
                         vad_filter=True,
-                        vad_parameters=dict(threshold=0.35, min_silence_duration_ms=300, speech_pad_ms=200)
+                        vad_parameters=dict(threshold=0.35, min_silence_duration_ms=250, speech_pad_ms=150)
                     )
                     return " ".join([segment.text for segment in segments]).strip()
                 except Exception as ex2:

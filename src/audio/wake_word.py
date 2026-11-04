@@ -258,7 +258,7 @@ class WakeWordDetector:
         preroll_chunks = deque(maxlen=5)  # 500ms de pre-buffer
         has_speech = False
         silence_frames = 0
-        max_silence_frames = 8   # ~800ms de silencio para permitir pausas naturales al hablar
+        max_silence_frames = 5   # ~500ms de silencio para respuesta ágil tras terminar de hablar
         max_total_chunks = 80    # ~8.0 segundos de comando continuo
 
         def stream_callback(indata, frames, time_info, status):

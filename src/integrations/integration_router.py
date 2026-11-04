@@ -15,6 +15,9 @@ from src.integrations.obs_controller import obs_controller
 from src.integrations.hardware_monitor import hardware_monitor
 from src.integrations.obsidian_client import obsidian_client
 from src.integrations.git_manager import git_manager
+from src.integrations.screen_vision import screen_vision
+from src.integrations.github_client import github_client
+from src.integrations.codebase_rag import codebase_rag
 
 
 class IntegrationRouter:
@@ -30,6 +33,9 @@ class IntegrationRouter:
         self.hardware = hardware_monitor
         self.obsidian = obsidian_client
         self.git = git_manager
+        self.vision = screen_vision
+        self.github = github_client
+        self.codebase = codebase_rag
 
     def execute_direct_action(self, action_type: str, target: str = "", params: Dict[str, Any] = None) -> Tuple[bool, str]:
         """Despacha la acción a la integración correspondiente."""
@@ -154,6 +160,35 @@ class IntegrationRouter:
             act = target or "current"
             branch_name = p.get("content", "")
             return self.git.branch(action=act, branch_name=branch_name)
+
+        # 8. Gemini Vision (Análisis Multimodal de Pantalla / Errores)
+        elif action in ["VISION_ANALYZE", "SCREEN_VISION", "ANALYZE_SCREEN"]:
+            query = p.get("content", "") or target
+            active_only = (target == "window")
+            return self.vision.analyze_screen(user_query=query, active_window_only=active_only)
+
+        # 9. GitHub REST API (Actions, PRs, Issues)
+        elif action in ["GITHUB_ACTIONS", "GITHUB_BUILD_STATUS"]:
+            return self.github.get_actions_status(repo=p.get("content", ""))
+
+        elif action in ["GITHUB_PRS", "GITHUB_PULL_REQUESTS"]:
+            return self.github.get_open_prs(repo=p.get("content", ""))
+
+        elif action in ["GITHUB_ISSUES", "GITHUB_OPEN_ISSUES"]:
+            return self.github.get_open_issues(repo=p.get("content", ""))
+
+        elif action in ["GITHUB_CREATE_ISSUE", "GITHUB_NEW_ISSUE"]:
+            issue_text = p.get("content", "") or target
+            return self.github.create_issue(title_and_body=issue_text)
+
+        # 10. Memoria Vectorial Local de Código (Codebase RAG)
+        elif action in ["CODEBASE_INDEX", "INDEX_CODEBASE"]:
+            ok, msg, _ = self.codebase.index_workspace(force=True)
+            return ok, msg
+
+        elif action in ["CODEBASE_ASK", "ASK_CODEBASE", "SEARCH_CODEBASE"]:
+            question = p.get("content", "") or target
+            return self.codebase.ask_codebase(question=question)
 
         return False, f"Acción directa '{action_type}' no reconocida."
 

@@ -79,7 +79,8 @@ class AppIndexer:
                         pass
         
         # 2. Integrar juegos de Steam detectados dinámicamente
-        self.steam_indexer.refresh()
+        if not self.steam_indexer.games:
+            self.steam_indexer.refresh()
         for alias, uri in self.steam_indexer.alias_map.items():
             if alias not in self.app_index:
                 self.app_index[alias] = uri

@@ -162,6 +162,27 @@ class DynamicResolver:
             "- Si es protocolo de app: {\"execution_target\": \"steam://\", \"type\": \"protocol\"}\n"
             "- Si es comando de sistema: {\"execution_target\": \"calc.exe\", \"type\": \"app\"}\n"
         )
+        # 1. Intentar con Gemini API primero si está configurada
+        api_key = getattr(settings, "GEMINI_API_KEY", "").strip()
+        if getattr(settings, "LLM_PROVIDER", "gemini") != "ollama" and api_key:
+            try:
+                import urllib.request
+                model_name = getattr(settings, "GEMINI_MODEL", "gemini-3.1-flash-lite") or "gemini-3.1-flash-lite"
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+                payload = json.dumps({
+                    "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                    "generationConfig": {"responseMimeType": "application/json", "temperature": 0.1}
+                }).encode("utf-8")
+                req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    raw_body = json.loads(resp.read().decode("utf-8"))
+                    text_out = raw_body["candidates"][0]["content"]["parts"][0]["text"].strip()
+                    data = json.loads(text_out)
+                    return data.get("execution_target"), data.get("type", "app")
+            except Exception:
+                pass
+
+        # 2. Fallback sin conexión con Ollama
         try:
             response = ollama.chat(
                 model=settings.OLLAMA_MODEL,
