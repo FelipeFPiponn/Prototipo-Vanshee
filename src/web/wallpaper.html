@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vanshee Core Wallpaper</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    html, body {
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      background: #000000;
+      font-family: 'Segoe UI', system-ui, sans-serif;
+    }
+    canvas {
+      display: block;
+      width: 100vw;
+      height: 100vh;
+    }
+    .hud-bar {
+      position: fixed;
+      bottom: 62px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 7px 16px;
+      border-radius: 999px;
+      background: rgba(2, 14, 26, 0.55);
+      border: 1px solid rgba(0, 229, 255, 0.28);
+      box-shadow: 0 0 18px rgba(0, 210, 255, 0.12);
+      transition: all 0.25s ease;
+      cursor: pointer;
+    }
+    .hud-bar.hovered {
+      background: rgba(4, 28, 48, 0.82);
+      border-color: rgba(56, 242, 255, 0.85);
+      box-shadow: 0 0 24px rgba(0, 229, 255, 0.5);
+      transform: translateX(-50%) scale(1.05);
+    }
+    .hud-status {
+      color: rgba(110, 235, 255, 0.65);
+      font-size: 11px;
+      letter-spacing: 2.5px;
+      text-transform: uppercase;
+      pointer-events: none;
+      transition: color 0.3s ease, text-shadow 0.3s ease;
+    }
+    .hud-status.speaking {
+      color: rgba(200, 252, 255, 0.98);
+      text-shadow: 0 0 14px rgba(0, 229, 255, 0.9);
+    }
+    .hud-divider {
+      width: 1px;
+      height: 13px;
+      background: rgba(0, 229, 255, 0.28);
+    }
+    .hud-gear-btn {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: rgba(130, 240, 255, 0.82);
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      transition: color 0.2s ease, text-shadow 0.2s ease, transform 0.25s ease;
+    }
+    .hud-bar.hovered .hud-gear-btn {
+      color: #e0fcff;
+      text-shadow: 0 0 12px rgba(0, 229, 255, 0.95);
+    }
+    .hud-gear-icon {
+      font-size: 13px;
+      display: inline-block;
+      transition: transform 0.35s ease;
+    }
+    .hud-bar.hovered .hud-gear-icon {
+      transform: rotate(65deg);
+    }
+  </style>
+</head>
+<body>
+  <canvas id="coreCanvas"></canvas>
+  <div id="hudBar" class="hud-bar" title="Haz clic para abrir la Configuración de Vanshee">
+    <div id="hudStatus" class="hud-status">V.ANSHEE CORE · ONLINE</div>
+    <span class="hud-divider"></span>
+    <div id="hudGearBtn" class="hud-gear-btn">
+      <span class="hud-gear-icon">⚙️</span>
+      <span>Ajustes</span>
+    </div>
+  </div>
+
+  <script>
+    (() => {
+      const canvas = document.getElementById('coreCanvas');
+      const ctx = canvas.getContext('2d', { alpha: false });
+      const hudStatus = document.getElementById('hudStatus');
+      const hudBar = document.getElementById('hudBar');
+
+      if (hudBar) {
+        hudBar.addEventListener('click', () => {
+          fetch('/api/window/toggle_chat', { method: 'POST' }).catch(() => {});
+        });
+      }
+
+      let width = window.innerWidth;
+      let height = window.innerHeight;
+      let cx = width * 0.5;
+      let cy = height * 0.5;
+      let baseScale = Math.min(width, height) * 0.23;
+
+      function resize() {
+        width = window.innerWidth;
+        height = window.innerHeight;
+        canvas.width = width;
+        canvas.height = height;
+        cx = width * 0.5;
+        cy = height * 0.5;
+        baseScale = Math.min(width, height) * 0.23;
+      }
+      window.addEventListener('resize', resize);
+      resize();
+
+      // Estado sincronizado con el servidor de Vanshee
+      let isDesktopVisible = true;
+      let isEnabled = true;
+      let isSpeaking = false;
+      let targetVoiceLevel = 0.0;
+      let smoothVoiceLevel = 0.0;
+
+      // Posición normalizada del mouse [-1, 1]
+      let targetMouseX = 0.0;
+      let targetMouseY = 0.0;
+      let smoothMouseX = 0.0;
+      let smoothMouseY = 0.0;
+
+      // Escuchar mouse local también (por si se abre en navegador o Lively Wallpaper)
+      window.addEventListener('mousemove', (e) => {
+        targetMouseX = (e.clientX / Math.max(1, width)) * 2.0 - 1.0;
+        targetMouseY = -((e.clientY / Math.max(1, height)) * 2.0 - 1.0);
+      });
+
+      // =========================================================================
+      // 1. Construcción de la Esfera Geodésica (Icosaedro subdividido frecuencia 3)
+      // =========================================================================
+      const t = (1.0 + Math.sqrt(5.0)) / 2.0;
+      const rawVerts = [
+        [-1,  t,  0], [ 1,  t,  0], [-1, -t,  0], [ 1, -t,  0],
+        [ 0, -1,  t], [ 0,  1,  t], [ 0, -1, -t], [ 0,  1, -t],
+        [ t,  0, -1], [ t,  0,  1], [-t,  0, -1], [-t,  0,  1]
+      ];
+      const rawFaces = [
+        [0,11,5],[0,5,1],[0,1,7],[0,7,10],[0,10,11],
+        [1,5,9],[5,11,4],[11,10,2],[10,7,6],[7,1,8],
+        [3,9,4],[3,4,2],[3,2,6],[3,6,8],[3,8,9],
+        [4,9,5],[2,4,11],[6,2,10],[8,6,7],[9,8,1]
+      ];
+
+      function normalize3(v) {
+        const len = Math.hypot(v[0], v[1], v[2]) || 1;
+        return [v[0] / len, v[1] / len, v[2] / len];
+      }
+
+      let geoVerts = rawVerts.map(normalize3);
+      let geoFaces = rawFaces;
+
+      // Subdividir 2 veces para obtener una malla geodésica densa idéntica a la imagen
+      for (let sub = 0; sub < 2; sub++) {
+        const midCache = new Map();
+        const newFaces = [];
+        function getMid(i1, i2) {
+          const key = i1 < i2 ? `${i1}_${i2}` : `${i2}_${i1}`;
+          if (midCache.has(key)) return midCache.get(key);
+          const v1 = geoVerts[i1];
+          const v2 = geoVerts[i2];
+          const mid = normalize3([(v1[0]+v2[0])*0.5, (v1[1]+v2[1])*0.5, (v1[2]+v2[2])*0.5]);
+          const idx = geoVerts.length;
+          geoVerts.push(mid);
+          midCache.set(key, idx);
+          return idx;
+        }
+        for (const [a, b, c] of geoFaces) {
+          const ab = getMid(a, b);
+          const bc = getMid(b, c);
+          const ca = getMid(c, a);
+          newFaces.push([a, ab, ca], [b, bc, ab], [c, ca, bc], [ab, bc, ca]);
+        }
+        geoFaces = newFaces;
+      }
+
+      // Extraer aristas únicas de la malla geodésica
+      const edgeSet = new Set();
+      const geoEdges = [];
+      for (const [a, b, c] of geoFaces) {
+        [[a,b],[b,c],[c,a]].forEach(([u, v]) => {
+          const k = u < v ? `${u}_${v}` : `${v}_${u}`;
+          if (!edgeSet.has(k)) {
+            edgeSet.add(k);
+            geoEdges.push([u, v]);
+          }
+        });
+      }
+
+      // Semilla de fase por vértice para vibración orgánica cuando Vanshee habla
+      const vertPhase = geoVerts.map((v, i) => i * 0.73 + v[0] * 3.1 + v[1] * 2.7);
+
+      // =========================================================================
+      // 2. Rayos Láser Radiales (Spikes que salen del núcleo y laten con la voz)
+      // =========================================================================
+      const NUM_RAYS = 26;
+      const rays = [];
+      for (let i = 0; i < NUM_RAYS; i++) {
+        // Distribución esférica Fibonacci + asimetría orgánica
+        const y = 1 - (i / (NUM_RAYS - 1)) * 2;
+        const radius = Math.sqrt(1 - y * y);
+        const theta = i * 2.399963229728653;
+        const dir = normalize3([
+          Math.cos(theta) * radius,
+          y,
+          Math.sin(theta) * radius * 0.75
+        ]);
+        rays.push({
+          dir,
+          baseLen: 1.18 + (i % 5) * 0.16,
+          freqOffset: i * 1.37,
+          width: (i % 3 === 0) ? 2.6 : 1.6
+        });
+      }
+
+      // =========================================================================
+      // 3. Anillos de Partículas Doradas y Arcos Orbitales
+      // =========================================================================
+      const NUM_PARTICLES = 950;
+      const particles = [];
+      const ringTilts = [
+        { rx: 0.95, ry: 0.42, rz: -0.35, radius: 1.32, spread: 0.16, speed: 0.55 },
+        { rx: -0.55, ry: 0.88, rz: 0.65, radius: 1.44, spread: 0.18, speed: -0.45 },
+        { rx: 0.25, ry: -0.75, rz: 1.05, radius: 1.20, spread: 0.13, speed: 0.70 }
+      ];
+
+      for (let i = 0; i < NUM_PARTICLES; i++) {
+        const band = i % ringTilts.length;
+        const ring = ringTilts[band];
+        const angle = Math.random() * Math.PI * 2;
+        const rOffset = (Math.random() - 0.5) * ring.spread;
+        const yOffset = (Math.random() - 0.5) * ring.spread * 0.65;
+        particles.push({
+          band,
+          angle,
+          r: ring.radius + rOffset,
+          yOff: yOffset,
+          speed: ring.speed * (0.8 + Math.random() * 0.4),
+          size: 1.1 + Math.random() * 2.2,
+          alpha: 0.35 + Math.random() * 0.65,
+          twinklePhase: Math.random() * Math.PI * 2
+        });
+      }
+
+      // =========================================================================
+      // Rotación 3D y Proyección en Perspectiva
+      // =========================================================================
+      function rotate3D(x, y, z, ax, ay, az) {
+        // Rotación X
+        let cosX = Math.cos(ax), sinX = Math.sin(ax);
+        let y1 = y * cosX - z * sinX;
+        let z1 = y * sinX + z * cosX;
+        // Rotación Y
+        let cosY = Math.cos(ay), sinY = Math.sin(ay);
+        let x2 = x * cosY + z1 * sinY;
+        let z2 = -x * sinY + z1 * cosY;
+        // Rotación Z
+        let cosZ = Math.cos(az), sinZ = Math.sin(az);
+        let x3 = x2 * cosZ - y1 * sinZ;
+        let y3 = x2 * sinZ + y1 * cosZ;
+        return [x3, y3, z2];
+      }
+
+      function project(x, y, z, centerX, centerY, scale) {
+        const fov = 3.6;
+        const dist = fov / (fov - z);
+        return [
+          centerX + x * scale * dist,
+          centerY + y * scale * dist,
+          dist,
+          z
+        ];
+      }
+
+      // =========================================================================
+      // Bucle de Renderizado con Auto-Pausa cuando el Escritorio está tapado
+      // =========================================================================
+      let animId = null;
+      let lastTime = performance.now();
+      let globalTime = 0;
+
+      function renderFrame(now) {
+        if (!isDesktopVisible || !isEnabled) {
+          animId = null;
+          return;
+        }
+        animId = requestAnimationFrame(renderFrame);
+
+        const dt = Math.min(0.05, (now - lastTime) * 0.001);
+        lastTime = now;
+
+        // Suavizado de voz y mouse (física de resorte suave)
+        const targetLvl = isSpeaking ? Math.max(0.18, targetVoiceLevel) : 0.0;
+        smoothVoiceLevel += (targetLvl - smoothVoiceLevel) * Math.min(1.0, dt * 14.0);
+        smoothMouseX += (targetMouseX - smoothMouseX) * Math.min(1.0, dt * 5.5);
+        smoothMouseY += (targetMouseY - smoothMouseY) * Math.min(1.0, dt * 5.5);
+
+        const speedMult = 1.0 + smoothVoiceLevel * 2.6;
+        globalTime += dt * speedMult;
+
+        // El centro del núcleo sigue sutilmente al cursor del mouse
+        const coreX = cx + smoothMouseX * (width * 0.085);
+        const coreY = cy - smoothMouseY * (height * 0.085);
+        const dynamicScale = baseScale * (1.0 + smoothVoiceLevel * 0.22);
+
+        // Limpiar fondo negro puro
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(0, 0, width, height);
+
+        // Modo aditivo para brillo holográfico neón/dorado (Bloom real por suma de luz)
+        ctx.globalCompositeOperation = 'lighter';
+
+        // 1. Halo ambiental exterior (Celeste Neón)
+        const outerRadius = dynamicScale * (2.1 + smoothVoiceLevel * 0.7);
+        const ambGrad = ctx.createRadialGradient(coreX, coreY, dynamicScale * 0.05, coreX, coreY, outerRadius);
+        ambGrad.addColorStop(0.0, `rgba(0, 235, 255, ${0.42 + smoothVoiceLevel * 0.35})`);
+        ambGrad.addColorStop(0.32, `rgba(0, 150, 255, ${0.22 + smoothVoiceLevel * 0.20})`);
+        ambGrad.addColorStop(0.68, `rgba(0, 60, 170, ${0.08 + smoothVoiceLevel * 0.08})`);
+        ambGrad.addColorStop(1.0, 'rgba(0, 0, 0, 0)');
+        ctx.fillStyle = ambGrad;
+        ctx.beginPath();
+        ctx.arc(coreX, coreY, outerRadius, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Inclinación 3D guiada por el mouse + rotación continua
+        const rotX = -smoothMouseY * 0.65 + Math.sin(globalTime * 0.35) * 0.2;
+        const rotY = smoothMouseX * 0.75 + globalTime * 0.42;
+        const rotZ = Math.cos(globalTime * 0.25) * 0.18;
+
+        // 2. Proyectar y dibujar Esfera Geodésica (con modulación de voz por vértice)
+        const projVerts = new Array(geoVerts.length);
+        for (let i = 0; i < geoVerts.length; i++) {
+          const [vx, vy, vz] = geoVerts[i];
+          const wave = Math.sin(globalTime * 6.0 + vertPhase[i]) * (0.015 + smoothVoiceLevel * 0.11);
+          const rMod = 1.0 + wave;
+          const [rx, ry, rz] = rotate3D(vx * rMod, vy * rMod, vz * rMod, rotX, rotY, rotZ);
+          projVerts[i] = project(rx, ry, rz, coreX, coreY, dynamicScale);
+        }
+
+        ctx.lineWidth = 1.05 + smoothVoiceLevel * 0.7;
+        for (let i = 0; i < geoEdges.length; i++) {
+          const [u, v] = geoEdges[i];
+          const p1 = projVerts[u];
+          const p2 = projVerts[v];
+          const avgZ = (p1[3] + p2[3]) * 0.5;
+          const alpha = Math.max(0.08, Math.min(0.85, (avgZ + 1.3) * 0.34 + smoothVoiceLevel * 0.25));
+          ctx.strokeStyle = `rgba(0, 215, 255, ${alpha.toFixed(3)})`;
+          ctx.beginPath();
+          ctx.moveTo(p1[0], p1[1]);
+          ctx.lineTo(p2[0], p2[1]);
+          ctx.stroke();
+        }
+
+        // 3. Dibujar Arcos Sólidos Orbitales (anillos curvados celeste neón)
+        for (let b = 0; b < 2; b++) {
+          const ring = ringTilts[b];
+          const arcSegments = 64;
+          const arcSpan = Math.PI * 1.25;
+          const startAng = globalTime * ring.speed * 0.8 + b * Math.PI;
+          ctx.beginPath();
+          for (let s = 0; s <= arcSegments; s++) {
+            const a = startAng + (s / arcSegments) * arcSpan;
+            const lx = Math.cos(a) * ring.radius;
+            const lz = Math.sin(a) * ring.radius;
+            const [rx, ry, rz] = rotate3D(
+              lx,
+              0,
+              lz,
+              ring.rx + rotX * 0.5,
+              ring.ry + rotY * 0.4,
+              ring.rz
+            );
+            const [px, py] = project(rx, ry, rz, coreX, coreY, dynamicScale);
+            if (s === 0) ctx.moveTo(px, py);
+            else ctx.lineTo(px, py);
+          }
+          ctx.lineWidth = (b === 0 ? 5.5 : 3.5) * (1.0 + smoothVoiceLevel * 0.5);
+          ctx.strokeStyle = `rgba(40, 235, 255, ${(0.38 + smoothVoiceLevel * 0.35).toFixed(3)})`;
+          ctx.stroke();
+        }
+
+        // 4. Dibujar Rayos Láser Radiales (laten con la voz de Vanshee)
+        for (let i = 0; i < rays.length; i++) {
+          const ray = rays[i];
+          const voicePulse = Math.abs(Math.sin(globalTime * 8.5 + ray.freqOffset)) * smoothVoiceLevel * 0.85;
+          const idlePulse = Math.sin(globalTime * 1.8 + ray.freqOffset) * 0.08;
+          const totalLen = ray.baseLen + idlePulse + voicePulse;
+
+          const [rx, ry, rz] = rotate3D(
+            ray.dir[0] * totalLen,
+            ray.dir[1] * totalLen,
+            ray.dir[2] * totalLen,
+            rotX * 0.8,
+            rotY * 0.8,
+            rotZ * 0.8
+          );
+          const [px, py, dist] = project(rx, ry, rz, coreX, coreY, dynamicScale);
+
+          const rayGrad = ctx.createLinearGradient(coreX, coreY, px, py);
+          const rayAlpha = Math.min(1.0, 0.55 + smoothVoiceLevel * 0.45);
+          rayGrad.addColorStop(0.0, `rgba(225, 254, 255, ${rayAlpha})`);
+          rayGrad.addColorStop(0.45, `rgba(0, 225, 255, ${rayAlpha * 0.85})`);
+          rayGrad.addColorStop(1.0, 'rgba(0, 100, 255, 0.0)');
+
+          ctx.strokeStyle = rayGrad;
+          ctx.lineWidth = ray.width * dist * (1.0 + smoothVoiceLevel * 0.9);
+          ctx.beginPath();
+          ctx.moveTo(coreX, coreY);
+          ctx.lineTo(px, py);
+          ctx.stroke();
+        }
+
+        // 5. Dibujar Bandas de Partículas Orbitales
+        for (let i = 0; i < particles.length; i++) {
+          const p = particles[i];
+          const ring = ringTilts[p.band];
+          p.angle += p.speed * dt * (1.0 + smoothVoiceLevel * 1.8);
+
+          const radialJitter = Math.sin(globalTime * 5.0 + p.twinklePhase) * (0.02 + smoothVoiceLevel * 0.12);
+          const curR = p.r + radialJitter;
+          const lx = Math.cos(p.angle) * curR;
+          const lz = Math.sin(p.angle) * curR;
+          const ly = p.yOff + Math.cos(p.angle * 2.0 + globalTime) * 0.04;
+
+          const [rx, ry, rz] = rotate3D(
+            lx,
+            ly,
+            lz,
+            ring.rx + rotX * 0.45,
+            ring.ry + rotY * 0.45,
+            ring.rz
+          );
+          const [px, py, dist] = project(rx, ry, rz, coreX, coreY, dynamicScale);
+
+          const twinkle = 0.65 + 0.35 * Math.sin(globalTime * 4.0 + p.twinklePhase);
+          const a = Math.min(1.0, p.alpha * twinkle * (0.85 + smoothVoiceLevel * 0.5));
+          const sz = p.size * dist * (1.0 + smoothVoiceLevel * 0.45);
+
+          ctx.fillStyle = `rgba(80, 240, 255, ${a.toFixed(3)})`;
+          ctx.beginPath();
+          ctx.arc(px, py, sz, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        // 6. Núcleo Central Incandescente Celeste Neón (reacciona intensamente al hablar)
+        const sunRadius = dynamicScale * (0.31 + smoothVoiceLevel * 0.16);
+        const sunGrad = ctx.createRadialGradient(coreX, coreY, sunRadius * 0.1, coreX, coreY, sunRadius * 1.9);
+        sunGrad.addColorStop(0.0, 'rgba(240, 255, 255, 1.0)');
+        sunGrad.addColorStop(0.28, 'rgba(120, 245, 255, 0.96)');
+        sunGrad.addColorStop(0.55, 'rgba(0, 200, 255, 0.68)');
+        sunGrad.addColorStop(1.0, 'rgba(0, 90, 255, 0.0)');
+
+        ctx.fillStyle = sunGrad;
+        ctx.beginPath();
+        ctx.arc(coreX, coreY, sunRadius * 1.9, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      function setDesktopVisibility(visible, enabled = true) {
+        isEnabled = enabled;
+        isDesktopVisible = visible && enabled;
+        if (!isEnabled) {
+          ctx.globalCompositeOperation = 'source-over';
+          ctx.fillStyle = '#000000';
+          ctx.fillRect(0, 0, width, height);
+        }
+        if (isDesktopVisible && animId === null) {
+          lastTime = performance.now();
+          animId = requestAnimationFrame(renderFrame);
+        }
+      }
+
+      // Iniciar bucle
+      animId = requestAnimationFrame(renderFrame);
+
+      // =========================================================================
+      // Conexión WebSocket de Baja Latencia con Vanshee (/ws/wallpaper)
+      // =========================================================================
+      function connectWallpaperWS() {
+        const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const host = window.location.host || '127.0.0.1:8000';
+        const ws = new WebSocket(`${proto}//${host}/ws/wallpaper`);
+
+        ws.onmessage = (ev) => {
+          try {
+            const data = JSON.parse(ev.data);
+            isSpeaking = !!data.speaking;
+            targetVoiceLevel = typeof data.level === 'number' ? data.level : 0.0;
+
+            if (typeof data.mouse_x === 'number' && typeof data.mouse_y === 'number') {
+              targetMouseX = data.mouse_x;
+              targetMouseY = data.mouse_y;
+            }
+
+            if (hudStatus) {
+              if (isSpeaking) {
+                hudStatus.textContent = 'V.ANSHEE · HABLANDO';
+                hudStatus.classList.add('speaking');
+              } else {
+                hudStatus.textContent = 'V.ANSHEE CORE · ESCUCHANDO';
+                hudStatus.classList.remove('speaking');
+              }
+            }
+            if (hudBar) {
+              if (data.hover_settings) {
+                hudBar.classList.add('hovered');
+              } else {
+                hudBar.classList.remove('hovered');
+              }
+            }
+
+            const vis = data.desktop_visible !== false;
+            const en = data.enabled !== false;
+            setDesktopVisibility(vis, en);
+          } catch (e) {}
+        };
+
+        ws.onclose = () => {
+          setTimeout(connectWallpaperWS, 1500);
+        };
+        ws.onerror = () => {
+          try { ws.close(); } catch (e) {}
+        };
+      }
+
+      connectWallpaperWS();
+    })();
+  </script>
+</body>
+</html>

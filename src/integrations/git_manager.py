@@ -31,7 +31,26 @@ class GitManager:
     """Gestiona el flujo de trabajo de Git y la generación de commits automatizados."""
 
     def __init__(self):
-        self._git_binary = shutil.which("git") or "git"
+        self._git_binary = self._resolve_git_binary()
+
+    def _resolve_git_binary(self) -> str:
+        """Encuentra el binario de Git en PATH o ubicaciones estándar de Windows / WinGet."""
+        found = shutil.which("git")
+        if found:
+            return found
+        import glob
+        home = os.path.expanduser("~")
+        candidates = [
+            *glob.glob(os.path.join(home, "AppData", "Local", "Microsoft", "WinGet", "Packages", "Git.MinGit*", "cmd", "git.exe")),
+            os.path.expandvars(r"%ProgramFiles%\Git\cmd\git.exe"),
+            os.path.expandvars(r"%ProgramFiles%\Git\bin\git.exe"),
+            os.path.expandvars(r"%ProgramFiles(x86)%\Git\cmd\git.exe"),
+            os.path.expandvars(r"%ProgramFiles(x86)%\Git\bin\git.exe"),
+        ]
+        for c in candidates:
+            if os.path.isfile(c):
+                return c
+        return "git"
 
     def _resolve_workspace_path(self, override_path: str = "") -> Optional[str]:
         """Detecta la ruta del repositorio Git activo según el editor conectado o el sistema."""

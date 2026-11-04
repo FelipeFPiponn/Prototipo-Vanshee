@@ -102,7 +102,7 @@ class FileManager:
 
             if open_after:
                 try:
-                    subprocess.Popen(f'explorer.exe "{target_path}"', shell=True)
+                    subprocess.Popen(["explorer.exe", str(target_path)])
                 except Exception as e:
                     print(f"[FileManager Warning] No se pudo abrir explorador: {e}")
 

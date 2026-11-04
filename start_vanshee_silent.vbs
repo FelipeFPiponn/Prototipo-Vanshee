@@ -5,6 +5,20 @@ WshShell.CurrentDirectory = ScriptDir
 
 PythonwPath = ScriptDir & "\.venv\Scripts\pythonw.exe"
 RunUiPath = ScriptDir & "\run_ui.py"
+DistExe = ScriptDir & "\dist\Vanshee\Vanshee.exe"
 
-' El parametro 0 indica que la ejecucion es 100% oculta sin ventana negra de consola
-WshShell.Run """" & PythonwPath & """ """ & RunUiPath & """", 0, False
+If fso.FileExists(PythonwPath) Then
+    WshShell.Run """" & PythonwPath & """ """ & RunUiPath & """", 0, False
+ElseIf fso.FileExists(DistExe) Then
+    WshShell.CurrentDirectory = ScriptDir & "\dist\Vanshee"
+    WshShell.Run """" & DistExe & """", 0, False
+Else
+    UserProf = WshShell.ExpandEnvironmentStrings("%USERPROFILE%")
+    For Each pyVer In Array("Python311", "Python312", "Python313", "Python310")
+        cand = UserProf & "\AppData\Local\Programs\Python\" & pyVer & "\pythonw.exe"
+        If fso.FileExists(cand) Then
+            WshShell.Run """" & cand & """ """ & RunUiPath & """", 0, False
+            Exit For
+        End If
+    Next
+End If

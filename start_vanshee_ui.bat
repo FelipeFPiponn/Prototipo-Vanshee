@@ -2,39 +2,50 @@
 title V.ANSHEE Core Console
 cd /d "%~dp0"
 
-if not exist ".venv\Scripts\python.exe" (
-    echo ============================================================
-    echo  [AVISO] No se encontro el entorno virtual .venv en este equipo.
-    echo ============================================================
-    echo  Es necesario configurar las dependencias antes del primer uso.
-    echo.
-    set /p INSTALL_NOW="Deseas crearlo y configurarlo ahora mismo? (S/N) [S]: "
+if exist "%~dp0.venv\Scripts\python.exe" (
+    echo [V.ANSHEE] Iniciando servidor y consola desde entorno .venv...
+    "%~dp0.venv\Scripts\python.exe" run_ui.py
+    goto :eof
 )
 
-if not exist ".venv\Scripts\python.exe" (
-    if /i "%INSTALL_NOW%"=="N" (
-        echo Operacion cancelada. Ejecuta install_vanshee.ps1 cuando desees instalar.
-        pause
-        exit /b 1
-    )
-    echo.
-    echo ==> Configurando entorno V.ANSHEE de forma automatica...
-    if exist "installer\offline_wheels" (
-        powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0installer\install_dev_offline.ps1"
-    ) else (
-        powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0install_vanshee.ps1"
-    )
-    if not exist ".venv\Scripts\python.exe" (
-        echo.
-        echo [ERROR] No se pudo crear o verificar el entorno .venv.
-        pause
-        exit /b 1
-    )
+if exist "%LOCALAPPDATA%\Programs\Python\Python311\python.exe" (
+    echo [V.ANSHEE] Iniciando servidor y consola con Python 3.11...
+    "%LOCALAPPDATA%\Programs\Python\Python311\python.exe" run_ui.py
+    goto :eof
 )
 
-echo ============================================================
-echo        V.ANSHEE CORE - INTERFAZ DE CONTROL WEB
-echo ============================================================
-echo Iniciando servidor y consola de usuario...
-".venv\Scripts\python.exe" run_ui.py
+if exist "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" (
+    echo [V.ANSHEE] Iniciando servidor y consola con Python 3.12...
+    "%LOCALAPPDATA%\Programs\Python\Python312\python.exe" run_ui.py
+    goto :eof
+)
+
+if exist "%LOCALAPPDATA%\Programs\Python\Python313\python.exe" (
+    echo [V.ANSHEE] Iniciando servidor y consola con Python 3.13...
+    "%LOCALAPPDATA%\Programs\Python\Python313\python.exe" run_ui.py
+    goto :eof
+)
+
+where python >nul 2>nul
+if %errorlevel% equ 0 (
+    echo [V.ANSHEE] Iniciando servidor y consola con Python del sistema...
+    python run_ui.py
+    goto :eof
+)
+
+where py >nul 2>nul
+if %errorlevel% equ 0 (
+    echo [V.ANSHEE] Iniciando servidor y consola con launcher py...
+    py run_ui.py
+    goto :eof
+)
+
+if exist "%~dp0dist\Vanshee\Vanshee.exe" (
+    echo [V.ANSHEE] Iniciando aplicacion compilada Vanshee.exe...
+    start "" /d "%~dp0dist\Vanshee" "Vanshee.exe"
+    goto :eof
+)
+
+echo [ERROR] No se encontro entorno Python (.venv, Python 3.11/3.12/3.13, PATH) ni dist\Vanshee\Vanshee.exe en %~dp0
 pause
+exit /b 1

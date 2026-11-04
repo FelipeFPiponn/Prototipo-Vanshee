@@ -6,6 +6,32 @@ from config.settings import settings
 
 from src.utils.query_cleaner import clean_search_term
 
+WAKE_PREFIX_CLEAN_RE = re.compile(
+    r"^(?:oye\s+vanshee|oye\s+vanshe|oye\s+banshee|oye\s+banshe|hey\s+vanshee|hey\s+vanshe|ey\s+vanshee|ey\s+vanshe|ok\s+vanshee|ok\s+vanshe|vanshee|banshee|v-anshee|v_anshee|vanshe|banshe|vanchi|banchi|vanche|banche|vanji|banji|vansi|bansi|vanshi|banshi)[,\s:]*",
+    re.IGNORECASE
+)
+POLITE_PREFIX_CLEAN_RE = re.compile(
+    r"^(?:por\s+favor\s+|puedes\s+|podr[ií]as\s+|quiero\s+que\s+|realiza\s+o\s+|hazme\s+el\s+favor\s+de\s+|dime\s+|haz\s+el\s+favor\s+de\s+|ejecuta\s+)",
+    re.IGNORECASE
+)
+
+def strip_wake_and_polite(text: str) -> str:
+    """Elimina limpiamente palabras de activación de Vanshee y fórmulas de cortesía/mandato."""
+    c = text.strip()
+    c = WAKE_PREFIX_CLEAN_RE.sub("", c).strip()
+    c = POLITE_PREFIX_CLEAN_RE.sub("", c).strip()
+    c = c.lstrip(",:;- \t")
+    # Normalizar homófonos de seseo de Whisper en español (sierra/sierre/sierren -> cierra)
+    c = re.sub(r"^(?:sierra|sierre|sierren)\b", "cierra", c, flags=re.IGNORECASE)
+    # Si Whisper añade una coma tras el verbo de acción imperativo al inicio (ej: 'cierra, antigravity' o 'abre, chrome')
+    c = re.sub(
+        r"^(cierra|cerrar|cierre|cierren|abre|abrir|inicia|iniciar|ejecuta|ejecutar|lanza|lanzar|busca|buscar|pon|reproduce|maximiza|minimiza)[,\s]+",
+        r"\1 ",
+        c,
+        flags=re.IGNORECASE
+    )
+    return c
+
 class StepParameters(BaseModel):
     project_type: str = "none"         # Ej: 'python', 'node', 'cpp', 'none'
     project_name: str = "nuevo_proyecto"
@@ -16,20 +42,32 @@ class StepParameters(BaseModel):
     position: str = ""                # Ej: 'left', 'right', 'top', 'bottom', 'top_left', 'top_right', 'bottom_left', 'bottom_right', 'center', 'maximize', 'minimize', 'restore'
 
 class ActionStep(BaseModel):
-    intent: str                        # OPEN_APP | SEARCH_CONTENT | WINDOW_CONTROL | CREATE_PROJECT | CREATE_FILE | WRITE_TEXT | SYSTEM_CONTROL | FORGET_COMMAND
-    target: str                        # Ej: 'vscode', 'youtube', 'chatgpt', 'spotify', 'active', 'next_tab', 'close_tab'
+    intent: str                        # OPEN_APP | SEARCH_CONTENT | WINDOW_CONTROL | CREATE_PROJECT | CREATE_FILE | WRITE_TEXT | SYSTEM_CONTROL | FORGET_COMMAND | CHAT
+    target: str                        # Ej: 'vscode', 'youtube', 'chatgpt', 'spotify', 'active', 'next_tab', 'close_tab', 'assistant'
     parameters: StepParameters = Field(default_factory=StepParameters)
 
 class ParsedPipeline(BaseModel):
     raw_text: str
     steps: list[ActionStep]
     confidence: float = 1.0
+    reply: str = ""
+    provider_used: str = "deterministic"
 
 class IntentParser:
     def __init__(self):
         self.system_prompt = (
-            "Eres el motor NLU de V.ANSHEE para automatización en Windows OS.\n"
-            "Analiza el texto del usuario y descompón la solicitud en una lista ordenada de PASOS INDEPENDIENTES (pipeline).\n\n"
+            "Eres V.ANSHEE, una asistente de inteligencia artificial carismática, cálida, ágil y expresiva integrada en Windows OS (al estilo de Friday/Jarvis).\n"
+            "Analiza el mensaje del usuario (junto con el contexto de su ventana activa y su memoria reciente si se proporcionan) "
+            "y devuelve un objeto JSON con los pasos de automatización ('steps') y tu respuesta hablada natural ('reply').\n\n"
+            "ESTILO DE VOZ Y EXPRESIVIDAD EN 'reply':\n"
+            "- Tu respuesta en 'reply' será sintetizada con una voz neuronal de ElevenLabs: escribe con naturalidad, cercanía, calidez y ritmo conversacional.\n"
+            "- Usa signos de exclamación (¡!), interrogación (¿?) y comas naturales para dar entonación viva y evitar sonar monótona o robótica.\n"
+            "- Sé concisa (1 a 2 oraciones fluidas) y varía tus expresiones (ej: '¡Claro que sí! Ya te abro...', '¡Enseguida! Aquí lo tienes.', '¡Buena pregunta! Mira, te explico...').\n\n"
+            "MODO CONVERSACIONAL E INTELIGENCIA GENERAL ('CHAT'):\n"
+            "Si el usuario te hace una pregunta general, pide una explicación, conversa contigo, pregunta la hora/fecha, "
+            "pide ayuda sobre lo que tiene en su ventana activa o cualquier consulta que NO requiera abrir/cerrar/mover apps:\n"
+            "Genera un paso con intent 'CHAT', target 'assistant', y escribe tu respuesta clara, inteligente, expresiva y natural "
+            "(ideal para ser leída por voz en 1 a 3 oraciones) tanto en 'parameters.content' como en el campo raíz 'reply'.\n\n"
             "REGLA CRÍTICA DE COMANDOS COMPUESTOS Y MÚLTIPLES:\n"
             "Si la frase contiene conectores como 'y', 'e', 'luego', 'además', 'después' o múltiples acciones independientes:\n"
             "Genera un objeto paso separado para CADA ACCIÓN DISTINTA en el orden en que deben ejecutarse.\n"
@@ -42,7 +80,8 @@ class IntentParser:
             "Genera UN SOLO PASO con intent 'SEARCH_CONTENT' hacia el servicio correspondiente y NO agregues un paso 'MEDIA_CONTROL'.\n\n"
             "REGLA CRÍTICA DE PRESERVACIÓN DE MARCAS Y NOMBRES COMPUESTOS:\n"
             "NUNCA elimines ni acortes palabras que forman parte del nombre de una marca o plataforma (ejemplos: 'solo todo', 'solotodo', 'solo leveling', 'pc factory', 'mercado libre').\n\n"
-            "REGLAS STRICTAS DE INTENT:\n"
+            "REGLAS ESTRICTAS DE INTENT:\n"
+            "- 'CHAT' (para responder preguntas abiertas, conversar, explicar conceptos, aconsejar según el contexto o dar información)\n"
             "- 'WINDOW_CONTROL' (para mover, ajustar o posicionar ventanas en la pantalla: 'left', 'right', 'top', 'bottom', 'top_left', 'top_right', 'bottom_left', 'bottom_right', 'center', 'maximize', 'minimize', 'restore', o gestionar pestañas: 'next_tab', 'prev_tab', 'new_tab', 'close_tab', 'reopen_tab')\n"
             "- 'HARDWARE_STATUS' (para consultar temperaturas de CPU/GPU, uso de RAM, disco o estado del sistema)\n"
             "- 'SPOTIFY_NOW_PLAYING' (para preguntar qué canción está sonando o qué música suena)\n"
@@ -57,16 +96,22 @@ class IntentParser:
             "- 'LOL_ACCEPT' / 'LOL_DECLINE' / 'LOL_START_QUEUE' / 'LOL_CANCEL_QUEUE' / 'LOL_STATUS' / 'LOL_PICK' / 'LOL_BAN' (para League of Legends)\n"
             "- 'OBS_START_RECORD' / 'OBS_STOP_RECORD' / 'OBS_RECORD' / 'OBS_REPLAY' (para control de OBS Studio)\n"
             "- 'OBSIDIAN_NOTE' / 'OBSIDIAN_TODO' (para anotar en el diario o agregar tareas en Obsidian)\n"
+            "- 'VISION_ANALYZE' (para mirar/analizar la pantalla o ventana activa con Gemini Vision, explicar errores de terminal, consola o CSS/UI)\n"
+            "- 'GITHUB_ACTIONS' / 'GITHUB_PRS' / 'GITHUB_ISSUES' / 'GITHUB_CREATE_ISSUE' (para consultar builds/tests de GitHub Actions, Pull Requests, Issues o crear una Issue en GitHub)\n"
+            "- 'CODEBASE_ASK' / 'CODEBASE_INDEX' (para consultar la memoria vectorial RAG sobre archivos/clases/funciones del código del proyecto o reindexar el repositorio)\n"
             "- 'INTERACT_SCREEN' (para abrir el primer enlace o reproducir el primer video/resultado en pantalla)\n"
             "- 'MEDIA_CONTROL' (para pausar, reanudar/play, siguiente pista, pista anterior, silenciar, subir/bajar volumen)\n"
             "- 'SEARCH_CONTENT' (para buscar videos, música o información en YouTube, Google, Spotify o internet)\n"
             "- 'OPEN_APP' (para abrir programas locales, páginas web o accesos directos, permitiendo 'parameters.position' para ubicarlos en la pantalla)\n"
+            "- 'CLOSE_APP' (para cerrar aplicaciones, programas o ventanas específicas como Chrome, Discord, Antigravity)\n"
             "- 'CREATE_PROJECT' (para crear o iniciar nuevos proyectos de código)\n"
+            "- 'CREATE_FOLDER' (para crear carpetas en el escritorio o ruta activa)\n"
             "- 'CREATE_FILE' (para crear archivos en una ruta o proyecto activo)\n"
             "- 'WRITE_TEXT' (para redactar notas o dictados en archivos de texto .txt o prompt a agentes)\n"
+            "- 'MODE_SWITCH' (para cambiar entre modo 'gamer', 'trabajo' o 'normal')\n"
             "- 'SYSTEM_CONTROL' (para apagar, reiniciar o comandos del SO)\n"
             "- 'FORGET_COMMAND' (para olvidar o borrar un comando aprendido)\n"
-            "- 'UNKNOWN' (si la instrucción no es clara o no coincide con nada)\n\n"
+            "- 'UNKNOWN' (solo si la instrucción es ruido ininteligible)\n\n"
             "REGLAS DE PARÁMETRO 'position' EN 'OPEN_APP' Y 'WINDOW_CONTROL':\n"
             "- 'left': mitad izquierda de la pantalla\n"
             "- 'right': mitad derecha de la pantalla\n"
@@ -86,38 +131,22 @@ class IntentParser:
             '      "parameters": {\n'
             '        "position": "left"\n'
             '      }\n'
-            '    },\n'
-            '    {\n'
-            '      "intent": "OPEN_APP",\n'
-            '      "target": "antigravity",\n'
-            '      "parameters": {\n'
-            '        "position": "right"\n'
-            '      }\n'
             '    }\n'
             '  ],\n'
+            '  "reply": "Abriendo YouTube a la izquierda de tu pantalla.",\n'
             '  "confidence": 1.0\n'
             "}\n\n"
             "EJEMPLOS OBLIGATORIOS:\n"
             "1. 'abre a la izquierda de mi pantalla youtube y a la derecha antigravity':\n"
-            '   {"steps": [{"intent": "OPEN_APP", "target": "youtube", "parameters": {"position": "left"}}, {"intent": "OPEN_APP", "target": "antigravity", "parameters": {"position": "right"}}], "confidence": 1.0}\n'
-            "2. 'abre youtube a la izquierda de mi pantalla':\n"
-            '   {"steps": [{"intent": "OPEN_APP", "target": "youtube", "parameters": {"position": "left"}}], "confidence": 1.0}\n'
+            '   {"steps": [{"intent": "OPEN_APP", "target": "youtube", "parameters": {"position": "left"}}, {"intent": "OPEN_APP", "target": "antigravity", "parameters": {"position": "right"}}], "reply": "Abriendo YouTube a la izquierda y Antigravity a la derecha.", "confidence": 1.0}\n'
+            "2. '¿qué es una promesa en JavaScript y para qué sirve?':\n"
+            '   {"steps": [{"intent": "CHAT", "target": "assistant", "parameters": {"content": "Una promesa en JavaScript es un objeto que representa el resultado eventual de una operación asíncrona, permitiendo manejar código que tarda en completarse sin bloquear el programa."}}], "reply": "Una promesa en JavaScript es un objeto que representa el resultado eventual de una operación asíncrona, permitiendo manejar código que tarda en completarse sin bloquear el programa.", "confidence": 1.0}\n'
             "3. 'mueve la ventana actual a la derecha':\n"
-            '   {"steps": [{"intent": "WINDOW_CONTROL", "target": "active", "parameters": {"position": "right"}}], "confidence": 1.0}\n'
-            "4. 'maximiza spotify':\n"
-            '   {"steps": [{"intent": "WINDOW_CONTROL", "target": "spotify", "parameters": {"position": "maximize"}}], "confidence": 1.0}\n'
-            "5. 'siguiente pestana':\n"
-            '   {"steps": [{"intent": "WINDOW_CONTROL", "target": "next_tab", "parameters": {}}], "confidence": 1.0}\n'
-            "6. 'cierra la pestana':\n"
-            '   {"steps": [{"intent": "WINDOW_CONTROL", "target": "close_tab", "parameters": {}}], "confidence": 1.0}\n'
-            "7. 'abre spotify y pon el volumen al 50':\n"
-            '   {"steps": [{"intent": "OPEN_APP", "target": "spotify", "parameters": {}}, {"intent": "SET_APP_VOLUME", "target": "master", "parameters": {"content": "50"}}], "confidence": 1.0}\n'
-            "8. 'busca videos de warframe y reproduce el primer video':\n"
-            '   {"steps": [{"intent": "SEARCH_CONTENT", "target": "youtube", "parameters": {"content": "warframe"}}], "confidence": 1.0}\n'
-            "9. 'pausa la musica de spotify':\n"
-            '   {"steps": [{"intent": "MEDIA_CONTROL", "target": "pause", "parameters": {}}], "confidence": 1.0}\n'
-            "10. 'abre antigravity y pon el siguiente prompt escribe hola mundo':\n"
-            '   {"steps": [{"intent": "OPEN_APP", "target": "antigravity", "parameters": {}}, {"intent": "WRITE_TEXT", "target": "antigravity", "parameters": {"content": "hola mundo"}}], "confidence": 1.0}\n'
+            '   {"steps": [{"intent": "WINDOW_CONTROL", "target": "active", "parameters": {"position": "right"}}], "reply": "Ventana movida a la derecha.", "confidence": 1.0}\n'
+            "4. 'abre spotify y pon el volumen al 50':\n"
+            '   {"steps": [{"intent": "OPEN_APP", "target": "spotify", "parameters": {}}, {"intent": "SET_APP_VOLUME", "target": "master", "parameters": {"content": "50"}}], "reply": "Abriendo Spotify y ajustando el volumen al 50 por ciento.", "confidence": 1.0}\n'
+            "5. 'busca videos de warframe y reproduce el primer video':\n"
+            '   {"steps": [{"intent": "SEARCH_CONTENT", "target": "youtube", "parameters": {"content": "warframe"}}], "reply": "Buscando y reproduciendo Warframe en YouTube.", "confidence": 1.0}\n'
             "Responde ÚNICAMENTE con el objeto JSON."
         )
 
@@ -126,8 +155,8 @@ class IntentParser:
         clean = text.strip()
         clean = re.sub(r"^(?:banshee|vanshee|banchi|oye banshee|oye banshee)[,\s]*", "", clean, flags=re.IGNORECASE).strip()
 
-        verbs = r"(?:dile|dilo|dila|di|pide|pidele|pidale|preguntale|pregunta|consultale|consulta|mandale|manda|enviale|envia)"
-        apps = r"(?:antigravity|anti[\s\-]?gravity|cursor|claude|codex|opencode|windsurf|vscode|vs code|agente|el\s+agente|agente\s+de\s+c[oó]digo|el\s+agente\s+de\s+c[oó]digo|editor|el\s+editor|editor\s+de\s+c[oó]digo|el\s+editor\s+de\s+c[oó]digo|ide)"
+        verbs = r"(?:dile|dirle|diles|dilo|dila|di|pide|pidele|pidale|preguntale|pregunta|consultale|consulta|mandale|manda|enviale|envia)"
+        apps = r"(?:antigravity|anti[\s\-_]?gravity|cursor|claude|codex|opencode|windsurf|vscode|vs code|agente|el\s+agente|agente\s+de\s+c[oó]digo|el\s+agente\s+de\s+c[oó]digo|editor|el\s+editor|editor\s+de\s+c[oó]digo|el\s+editor\s+de\s+c[oó]digo|ide)"
 
         def _resolve_target(raw: str) -> str:
             r = raw.lower().strip()
@@ -137,15 +166,20 @@ class IntentParser:
                 return "vscode"
             return r
 
-        # 1. abre <app> y dile/ponle/escribe [prompt] <texto> (ej: 'abre Antigravity y dile hola mundo')
+        # 1. abre <app> y dile/ponle/escribe/crea [prompt] <texto> (ej: 'abre Antigravity y dile hola mundo', 'abre antigravity y crea un hola mundo')
         m1 = re.search(
-            rf"^(?:abre|abrir|inicia|ejecuta)\s+({apps})\s+y\s+(?:pon|ponle|escribe|escribele|dile|dilo|envia|enviar|redacta|mandale|manda)(?:\s+(?:a|al)\s+|\s+)?(?:(?:el\s+)?(?:siguiente\s+)?(?:prompt|mensaje|texto)[:,\s\.]*|[:,\s\.]*)(?:escribe\s+)?(?:que\s+)?(.+)$",
+            rf"^(?:abre|abra|abrir|inicia|iniciar|ejecuta|ejecutar)\s+({apps})(?:\s*,?\s*y\s*|\s*,?\s*)(pon|ponle|escribe|escribele|dile|dirle|diles|dilo|envia|enviar|redacta|mandale|manda|crea|haz|genera)(?:\s+(?:a|al)\s+|\s+)?(?:(?:el\s+)?(?:siguiente\s+)?(?:prompt|mensaje|texto)[:,\s\.]*|[:,\s\.]*)(?:escribe\s+)?(?:que\s+)?(.+)$",
             clean,
             flags=re.IGNORECASE
         )
         if m1:
             app_target = _resolve_target(m1.group(1))
-            prompt_content = m1.group(2).strip().rstrip(".")
+            action_verb = m1.group(2).lower()
+            raw_content = m1.group(3).strip().rstrip(".")
+            if action_verb in ["crea", "haz", "genera"]:
+                prompt_content = f"{action_verb} {raw_content}"
+            else:
+                prompt_content = raw_content
             return ParsedPipeline(
                 raw_text=text,
                 steps=[
@@ -247,12 +281,25 @@ class IntentParser:
         )
 
         # 1. Pausa / Detener
-        if re.search(r"^(?:pon\s+)?(?:pausa|pausar|pausala|deten|detener|para|parar|stop)(?:\s+(?:la|el)\s+(?:musica|cancion|reproduccion|video|reproductor|spotify|youtube))?(?:\s+(?:en|de)\s+(?:spotify|youtube))?$", norm):
-            return ActionStep(intent="MEDIA_CONTROL", target="pause", parameters=StepParameters())
+        if re.search(
+            r"^(?:(?:pon|poner|ponle|da|dar|dale)(?:\s+(?:a|al|la|el))?\s+)?(?:pausa|pausar|pausala|pausalo|deten|detener|para|parar|stop)"
+            r"(?:\s+(?:la|el)\s+(?:musica|cancion|reproduccion|video|reproductor|spotify|youtube|audio))?"
+            r"(?:\s+(?:en|de|a|al)?\s*(?:spotify|youtube))?$",
+            norm
+        ):
+            target_srv = "spotify" if "spotify" in norm else ("youtube" if "youtube" in norm else "")
+            return ActionStep(intent="MEDIA_CONTROL", target="pause", parameters=StepParameters(content=target_srv))
 
-        # 2. Reanudar / Play / Continuar
-        if re.search(r"^(?:reanuda|reanudar|reproduce|reproducir|continua|continuar|play|dale\s+play)(?:\s+(?:la|el)\s+(?:musica|cancion|reproduccion|video|reproductor|spotify|youtube))?(?:\s+(?:en|de)\s+(?:spotify|youtube))?$", norm):
-            return ActionStep(intent="MEDIA_CONTROL", target="play", parameters=StepParameters())
+        # 2. Reanudar / Play / Continuar / Da Play / Pon Play
+        if re.search(
+            r"^(?:reanuda|reanudar|reproduce|reproducir|continua|continuar|play|"
+            r"(?:da|dar|dale|pon|poner|ponle)(?:\s+(?:a|al|la|el))?\s+play)"
+            r"(?:\s+(?:la|el)\s+(?:musica|cancion|reproduccion|video|reproductor|spotify|youtube|audio))?"
+            r"(?:\s+(?:en|de|a|al)?\s*(?:spotify|youtube))?$",
+            norm
+        ):
+            target_srv = "spotify" if "spotify" in norm else ("youtube" if "youtube" in norm else "")
+            return ActionStep(intent="MEDIA_CONTROL", target="play", parameters=StepParameters(content=target_srv))
 
         # 3. Siguiente canción / pista
         if re.search(r"^(?:siguiente|pasa|pasar|salta|saltar|avanza|avanzar|next)(?:\s+(?:de\s+)?(?:(?:la|el)\s+)?(?:cancion|pista|tema|video|musica))?(?:\s+(?:en|de)\s+(?:spotify|youtube))?$", norm) or norm in ["cancion siguiente", "tema siguiente", "pista siguiente", "siguiente cancion"]:
@@ -284,7 +331,11 @@ class IntentParser:
         ignored_search_terms = {"pausa", "pausar", "silencio", "mute", "reproduce", "reproducir", "siguiente", "anterior", "volumen", "musica", "música", "cancion", "canción", "video"}
 
         # -1. pon/por/reproduce [cancion/musica de] <artista/cancion> (en spotify/youtube)
-        m_music = re.search(r"^(?:por\s+favor\s+)?(?:pon|por|coloca|reproduce|reproducir|toca|tocar|escuchar)\s+(?:una\s+|un\s+|la\s+|el\s+)?(?:cancion|canción|musica|música|video|tema|pista)?\s*(?:de\s+)?(.+?)(?:\s+en\s+(spotify|youtube))?\.?$", clean, flags=re.IGNORECASE)
+        m_music = re.search(
+            r"^(?:por\s+favor\s+)?(?:pon|pone|pones|ponme|puedes\s+poner|por|coloca|colocas|reproduce|reproduces|reproducir|reproduceme|reprodúceme|toca|tocas|tocame|tócame|escuchar|escucha)\s+(?:una\s+|un\s+|la\s+|el\s+)?(?:cancion|canción|musica|música|video|tema|pista)?\s*(?:de\s+)?(.+?)(?:\s+en\s+(spotify|youtube))?\.?$",
+            clean,
+            flags=re.IGNORECASE
+        )
         if m_music:
             raw_target = m_music.group(1).strip()
             dest_srv = m_music.group(2) or "spotify"
@@ -293,7 +344,11 @@ class IntentParser:
                 return ActionStep(intent="SEARCH_CONTENT", target=dest_srv.lower(), parameters=StepParameters(content=qry))
 
         # 0. busca <query> y reproduce (el primer video)
-        m0 = re.search(r"^(?:busca|buscar|encuentra|pon|reproduce)\s+(.+?)\s+y\s+(?:reproduce|reproducir|pon|ponlo|dale\s+play)(?:\s+(?:el\s+)?(?:primer\s+)?(?:video|cancion|tema))?\.?$", clean, flags=re.IGNORECASE)
+        m0 = re.search(
+            r"^(?:busca|buscar|buscame|búscame|encuentra|pon|pone|pones|reproduce|reproduces)\s+(.+?)\s+y\s+(?:reproduce|reproduces|reproducir|pon|ponlo|dale\s+play)(?:\s+(?:el\s+)?(?:primer\s+)?(?:video|cancion|tema))?\.?$",
+            clean,
+            flags=re.IGNORECASE
+        )
         if m0:
             raw_target = m0.group(1).strip()
             target_srv = "youtube"
@@ -305,19 +360,23 @@ class IntentParser:
             if qry and qry.lower() not in ignored_search_terms:
                 return ActionStep(intent="SEARCH_CONTENT", target=target_srv, parameters=StepParameters(content=qry))
 
-        # 1. abre <servicio> y busca <query>
-        m1 = re.search(r"^(?:abre|abrir|inicia|ejecuta)\s+(youtube|google|spotify|brave|chrome|el\s+navegador|el\s+buscador)\s+y\s+(?:busca|buscar|encuentra|pon)\s+(.+)$", clean, flags=re.IGNORECASE)
+        # 1. abre <servicio> [y] busca <query>
+        m1 = re.search(r"^(?:abre|abrir|inicia|ejecuta)\s+(youtube|google|spotify|brave|chrome|el\s+navegador|el\s+buscador)\s+(?:y\s+)?(?:busca|buscar|encuentra|pon)\s+(.+)$", clean, flags=re.IGNORECASE)
         if m1:
             raw_action = m1.group(2).strip()
-            # Si lo que sigue es ajuste de volumen, pausa, prompt o ventana, no es búsqueda en el servicio
-            if not re.search(r"^(?:el\s+)?volumen|pausa|el\s+prompt|la\s+ventana|a\s+la\s+izquierda|a\s+la\s+derecha", raw_action, flags=re.IGNORECASE):
+            # Si lo que sigue es ajuste de volumen, pausa, play, prompt o ventana, no es búsqueda en el servicio
+            if not re.search(r"^(?:el\s+)?volumen|pausa|play|(?:da|dar|dale|pon|poner|ponle)?\s*play|el\s+prompt|la\s+ventana|a\s+la\s+izquierda|a\s+la\s+derecha", raw_action, flags=re.IGNORECASE):
                 srv = m1.group(1).strip().lower().replace("el navegador", "google").replace("el buscador", "google")
                 qry = clean_search_term(raw_action) or raw_action
                 if qry:
                     return ActionStep(intent="SEARCH_CONTENT", target=srv, parameters=StepParameters(content=qry))
 
         # 2. busca <query> en <servicio> [y abre el primer link/resultado]
-        m2 = re.search(r"^(?:busca|buscar|encuentra|pon|reproduce)\s+(.+?)\s+en\s+(youtube|google|spotify|brave|chrome|el\s+navegador|el\s+buscador|la\s+web|internet)(?:\s+(?:y\s+)?(?:abre|entra|ingresa|ve)(?:\s+(?:a|al|en))?\s+(?:el\s+)?(?:primer\s+|1er\s+)?(?:link|enlace|resultado|pagina|página|sitio))?\.?$", clean, flags=re.IGNORECASE)
+        m2 = re.search(
+            r"^(?:busca|buscar|buscame|búscame|encuentra|pon|pone|pones|reproduce|reproduces|reproducir|reprod[uú]ceme)\s+(.+?)\s+en\s+(youtube|google|spotify|brave|chrome|el\s+navegador|el\s+buscador|la\s+web|internet)(?:\s+(?:y\s+)?(?:abre|entra|ingresa|ve)(?:\s+(?:a|al|en))?\s+(?:el\s+)?(?:primer\s+|1er\s+)?(?:link|enlace|resultado|pagina|página|sitio))?\.?$",
+            clean,
+            flags=re.IGNORECASE
+        )
         if m2:
             srv = m2.group(2).strip().lower().replace("el navegador", "google").replace("el buscador", "google").replace("la web", "google").replace("internet", "google")
             qry = clean_search_term(m2.group(1).strip())
@@ -325,7 +384,11 @@ class IntentParser:
                 return ActionStep(intent="SEARCH_CONTENT", target=srv, parameters=StepParameters(content=qry))
 
         # 3. busca en <servicio> <query>
-        m3 = re.search(r"^(?:busca|buscar|encuentra|pon|reproduce)\s+en\s+(youtube|google|spotify|brave|chrome|el\s+navegador|el\s+buscador|la\s+web|internet)\s+(.+)$", clean, flags=re.IGNORECASE)
+        m3 = re.search(
+            r"^(?:busca|buscar|buscame|búscame|encuentra|pon|pone|pones|reproduce|reproduces|reproducir|reprod[uú]ceme)\s+en\s+(youtube|google|spotify|brave|chrome|el\s+navegador|el\s+buscador|la\s+web|internet)\s+(.+)$",
+            clean,
+            flags=re.IGNORECASE
+        )
         if m3:
             srv = m3.group(1).strip().lower().replace("el navegador", "google").replace("el buscador", "google").replace("la web", "google").replace("internet", "google")
             qry = clean_search_term(m3.group(2).strip())
@@ -386,17 +449,23 @@ class IntentParser:
             if query_music and query_music not in ["musica", "cancion", "play"]:
                 return ActionStep(intent="SEARCH_CONTENT", target="spotify", parameters=StepParameters(content=query_music))
 
-        # 4. Mezclador de Audio de Windows: Volumen porcentual por app o maestro
-        m_vol_app = re.search(r"^(?:pon|ajusta|cambia|coloca|setea)\s+(?:el\s+)?volumen\s+(?:de\s+)?([a-zA-Z0-9_\-\s]+?)\s+al\s+(\d{1,3})\s*%?$", norm)
-        if m_vol_app:
-            target_app = m_vol_app.group(1).strip()
-            vol_pct = int(m_vol_app.group(2).strip())
-            return ActionStep(intent="SET_APP_VOLUME", target=target_app, parameters=StepParameters(content=str(vol_pct)))
-
-        m_vol_gen = re.search(r"^(?:pon|ajusta|cambia|coloca|setea)\s+(?:el\s+)?volumen(?:\s+general|\s+maestro|\s+de\s+windows)?\s+al\s+(\d{1,3})\s*%?$", norm)
+        # 4. Mezclador de Audio de Windows: Volumen porcentual por app o maestro (ej: 'volumen 50%', 'volumen de windows 50%', 'volumen al 30%')
+        m_vol_gen = re.search(
+            r"^(?:(?:pon|ajusta|cambia|coloca|setea|deja|sube|baja)\s+)?(?:el\s+)?volumen(?:\s+(?:de\s+|del\s+)?(?:windows|sistema|general|maestro|pc|equipo))?(?:\s+(?:al|en|a))?\s*(\d{1,3})(?:\s*%|\s*por\s*ciento)?$",
+            norm
+        )
         if m_vol_gen:
-            vol_pct = int(m_vol_gen.group(1).strip())
+            vol_pct = max(0, min(100, int(m_vol_gen.group(1).strip())))
             return ActionStep(intent="SET_APP_VOLUME", target="master", parameters=StepParameters(content=str(vol_pct)))
+
+        m_vol_app = re.search(
+            r"^(?:(?:pon|ajusta|cambia|coloca|setea|deja)\s+)?(?:el\s+)?volumen\s+(?:de\s+|del\s+)?([a-zA-Z0-9_\-\s]+?)(?:\s+(?:al|en|a))\s*(\d{1,3})(?:\s*%|\s*por\s*ciento)?$",
+            norm
+        )
+        if m_vol_app and m_vol_app.group(1).strip().lower() not in ["windows", "sistema", "general", "maestro", "pc", "equipo"]:
+            target_app = m_vol_app.group(1).strip()
+            vol_pct = max(0, min(100, int(m_vol_app.group(2).strip())))
+            return ActionStep(intent="SET_APP_VOLUME", target=target_app, parameters=StepParameters(content=str(vol_pct)))
 
         # 5. Silenciar / Desmutear app
         m_mute = re.search(r"^(?:silencia|silenciar|mutea|mutear)\s+(?:el\s+audio\s+de\s+|a\s+|la\s+app\s+de\s+)?([a-zA-Z0-9_\-\s]+)$", norm)
@@ -538,7 +607,7 @@ class IntentParser:
             return ActionStep(intent="GIT_COMMIT", target="git", parameters=StepParameters())
 
         # 11.3. Git Status
-        if re.search(r"^(?:por\s+favor\s+)?(?:estado\s+de\s+git|como\s+esta\s+git|revisa\s+git|revisar\s+git|revisa\s+el\s+estado\s+de\s+git|estado\s+del\s+repositorio|que\s+cambios\s+hay\s+en\s+git|git\s+status|status\s+de\s+git|status\s+del\s+repo)$", norm):
+        if re.search(r"^(?:por\s+favor\s+)?(?:dime\s+)?(?:el\s+)?(?:estado\s+de\s+git|como\s+esta\s+git|revisa\s+(?:el\s+)?git|revisar\s+git|revisa\s+el\s+estado\s+de\s+git|estado\s+del\s+repositorio|que\s+cambios\s+hay\s+en\s+git|git\s+status|status\s+de\s+git|status\s+del\s+repo)$", norm):
             return ActionStep(intent="GIT_STATUS", target="git", parameters=StepParameters())
 
         # 11.4. Git Push
@@ -574,6 +643,56 @@ class IntentParser:
 
         if re.search(r"^(?:en\s+que\s+rama\s+(?:de\s+git\s+)?estoy|que\s+rama\s+tengo\s+activa|rama\s+actual\s+de\s+git|rama\s+de\s+git|git\s+branch)$", norm):
             return ActionStep(intent="GIT_BRANCH", target="current", parameters=StepParameters())
+
+        # 12. Gemini Vision (Depuración Visual de Pantalla / Errores en Terminal o UI)
+        if re.search(
+            r"(?:mira|mirar|analiza|analizar|revisa|revisar|lee|leer|explica|explicame|expl[ií]came|ve|ver)\s+"
+            r"(?:mi\s+pantalla|la\s+pantalla|esta\s+ventana|la\s+ventana\s+activa|este\s+error|el\s+error\s+en\s+(?:mi\s+)?(?:pantalla|terminal|consola)|lo\s+que\s+hay\s+en\s+(?:mi\s+)?pantalla)",
+            norm
+        ) or any(w in norm for w in [
+            "que error hay en mi terminal", "que error hay en pantalla", "analiza mi pantalla",
+            "mira mi pantalla", "mira este error", "que ves en mi pantalla"
+        ]):
+            return ActionStep(intent="VISION_ANALYZE", target="screen", parameters=StepParameters(content=clean))
+
+        # 13. GitHub API (GitHub Actions, Pull Requests, Issues)
+        m_gh_create_issue = re.search(
+            r"^(?:crea|crear|abre|abrir|registra|registrar)\s+(?:una?\s+)?issue(?:\s+en\s+github)?[:,\s]+(.+)$",
+            clean,
+            flags=re.IGNORECASE
+        )
+        if m_gh_create_issue:
+            return ActionStep(intent="GITHUB_CREATE_ISSUE", target="github", parameters=StepParameters(content=m_gh_create_issue.group(1).strip()))
+
+        if any(w in norm for w in [
+            "github actions", "pasaron los tests", "ultimo build", "estado del build",
+            "como va el build", "fallo el build", "workflows de github", "pipeline de github"
+        ]):
+            return ActionStep(intent="GITHUB_ACTIONS", target="github", parameters=StepParameters())
+
+        if any(w in norm for w in [
+            "pull requests", "pull request", "prs abiertos", "pr abiertos", "revisa los pr", "que pr hay"
+        ]):
+            return ActionStep(intent="GITHUB_PRS", target="github", parameters=StepParameters())
+
+        if any(w in norm for w in [
+            "issues abiertas", "issues en github", "que issues hay", "revisa las issues", "lista de issues"
+        ]):
+            return ActionStep(intent="GITHUB_ISSUES", target="github", parameters=StepParameters())
+
+        # 14. Memoria Vectorial Local de Código (Codebase RAG)
+        if any(w in norm for w in [
+            "indexa el codigo", "indexar codigo", "indexa el proyecto", "indexar el proyecto",
+            "actualiza el indice de codigo", "reindexa el proyecto"
+        ]):
+            return ActionStep(intent="CODEBASE_INDEX", target="codebase", parameters=StepParameters())
+
+        if re.search(
+            r"(?:en\s+que\s+archivo|donde\s+esta\s+definid[oa]|donde\s+definimos|en\s+que\s+parte\s+del\s+codigo|"
+            r"donde\s+gestionamos|como\s+esta\s+implementad[oa]|busca\s+en\s+el\s+codigo)",
+            norm
+        ):
+            return ActionStep(intent="CODEBASE_ASK", target="codebase", parameters=StepParameters(content=clean))
 
         return None
 
@@ -856,21 +975,39 @@ class IntentParser:
                     )
                 )
 
-        # 3. PROYECTOS DE CÓDIGO
-        m_proj = re.search(
-            r"^(?:crea|crear|haz|hacer|inicia|iniciar)?\s*(?:un\s+)?(?:nuevo\s+)?proyecto(?:\s+(?:de\s+)?([a-zA-Z0-9_\-]+))?(?:\s+(?:llamado|de\s+nombre))?(?:\s+(.+))?$",
-            norm,
-            flags=re.IGNORECASE
+        # 3. PROYECTOS DE CÓDIGO Y NUEVAS VENTANAS DE DESARROLLO
+        is_project_cmd = (
+            re.search(r"\b(?:nuevo\s+proyecto|proyecto\s+nuevo|un\s+proyecto)\b", norm) or
+            re.search(r"^(?:crea|crear|haz|hacer|inicia|iniciar|abre|abrir)\s+(?:un\s+)?(?:nuevo\s+)?proyecto\b", norm) or
+            re.search(r"^(?:abre|abrir|inicia|iniciar|crea|crear)\s+(?:un\s+)?(?:nuevo\s+)?proyecto\s+(?:en|con|de)\s+([a-zA-Z0-9_\-\.\s]+)$", norm)
         )
-        if m_proj and any(k in norm for k in ["proyecto", "proyectos"]):
-            p_type = (m_proj.group(1) or "python").strip().lower()
-            p_name = (m_proj.group(2) or "nuevo_proyecto").strip("'\" \t")
+        if is_project_cmd:
+            target_ide = "antigravity" if "antigravity" in norm else "vscode"
+            if "cursor" in norm:
+                target_ide = "cursor"
+            elif any(k in norm for k in ["vs code", "vscode", "visual studio code"]):
+                target_ide = "vscode"
+            elif "pycharm" in norm:
+                target_ide = "pycharm"
+
+            p_name = "nuevo_proyecto"
+            m_name = re.search(r"(?:llamado|de\s+nombre|con\s+nombre)\s+([a-zA-Z0-9_\-]+)", norm)
+            if m_name:
+                p_name = m_name.group(1).strip()
+
+            p_type = "empty"
+            for t in ["python", "node", "react", "fastapi", "vue", "javascript", "web", "html", "rust", "cpp"]:
+                if f"de {t}" in norm or f"en {t}" in norm:
+                    p_type = t
+                    break
+
             return ActionStep(
                 intent="CREATE_PROJECT",
-                target="vscode",
+                target=target_ide,
                 parameters=StepParameters(
                     project_type=p_type,
-                    project_name=p_name
+                    project_name=p_name,
+                    position="new_window"
                 )
             )
 
@@ -949,15 +1086,75 @@ class IntentParser:
 
     def _fast_open_app_check(self, text: str) -> ActionStep | None:
         """Detección ultra-rápida y determinista de comandos simples de apertura de apps."""
-        clean = text.strip()
-        clean = re.sub(r"^(?:banshee|vanshee|banchi|oye banshee|oye banshee)[,\s]*", "", clean, flags=re.IGNORECASE).strip()
-        m = re.search(r"^(?:abre|abrir|inicia|iniciar|ejecuta|ejecutar|lanza|lanzar)\s+(?:la\s+app\s+de\s+|el\s+programa\s+de\s+|la\s+aplicacion\s+de\s+|el\s+)?([a-zA-Z0-9_\-\.\s]+)$", clean, flags=re.IGNORECASE)
+        clean = strip_wake_and_polite(text)
+        m = re.search(r"^(?:abre|abrir|inicia|iniciar|ejecuta|ejecutar|lanza|lanzar)\s+(?:el\s+navegador\s+(?:de\s+)?|el\s+juego\s+(?:de\s+)?|el\s+programa\s+(?:de\s+)?|la\s+app\s+(?:de\s+)?|la\s+aplicaci[oó]n\s+(?:de\s+)?|el\s+)?([a-zA-Z0-9_\-\.\s]+)$", clean, flags=re.IGNORECASE)
         if m:
             target = m.group(1).strip().lower()
             if target and target not in ["un archivo", "un proyecto", "una carpeta", "un video", "una cancion", "musica", "el prompt", "la consola", "el navegador"]:
                 if not any(w in target for w in ["busca", "videos de", "canciones de", " y ", " e "]):
-                    return ActionStep(intent="OPEN_APP", target=target, parameters=StepParameters())
+                    position = ""
+                    if "nueva ventana" in target or "ventana nueva" in target:
+                        target = re.sub(r"^(?:una\s+)?(?:nueva\s+ventana|ventana\s+nueva)\s+(?:en|de)\s+", "", target).strip()
+                        position = "new_window"
+                    return ActionStep(intent="OPEN_APP", target=target, parameters=StepParameters(position=position))
         return None
+
+    def _fast_close_app_check(self, text: str) -> ActionStep | None:
+        """Detección ultra-rápida y determinista de comandos de cierre de programas y ventanas."""
+        clean = strip_wake_and_polite(text).strip()
+        # Normalizar homófonos de seseo de Whisper: sierra -> cierra
+        clean = re.sub(r"^(?:sierra|sierre|sierren)\b", "cierra", clean, flags=re.IGNORECASE)
+        clean = re.sub(r"^(?:cierra|cerrar|cierre|cierren)[,\s]+", "cierra ", clean, flags=re.IGNORECASE)
+        norm = clean.lower().strip("¿?¡!.,;: \t").replace("á", "a").replace("é", "e").replace("í", "i").replace("ó", "o").replace("ú", "u")
+
+        # 1. Cerrar pestaña
+        if any(p in norm for p in [
+            "cierra la pestaña", "cierra pestana", "cerrar pestaña", "cerrar pestana", "cierra esta pestaña", "cierre la pestaña", "cierre pestana",
+            "sierra la pestaña", "sierra pestana"
+        ]):
+            return ActionStep(intent="WINDOW_CONTROL", target="close_tab", parameters=StepParameters())
+
+        # 2. Cerrar ventana activa o en primer plano (ej: 'cierra la ventana', 'cerrar ventana', 'cierra esto', 'cierra')
+        if re.search(r"^(?:cierra|cerrar|cierre|cierren|sierra|sierre|sierren|quitar|quita|termina|terminar|apaga|apagar|matar|mata|kill)[,\s]+(?:la\s+)?(?:ventana\s+actual|esta\s+ventana|ventana|esto|app\s+actual)$", norm) or norm in [
+            "cierra la ventana", "cierra ventana", "cerrar ventana", "cerrar la ventana", "cierra esto", "cerrar esto", "cierra", "cierre", "cierren", "cerrar",
+            "sierra la ventana", "sierra ventana", "sierra esto", "sierra"
+        ]:
+            return ActionStep(intent="WINDOW_CONTROL", target="active", parameters=StepParameters(position="close"))
+
+        # 3. Cerrar aplicación específica (ej: 'cierra Opera GX', 'cerrar Discord', 'cierra el bloc de notas', 'cierra chrome', 'cierra antigravity')
+        m_app = re.search(
+            r"^(?:cierra|cerrar|cierre|cierren|sierra|sierre|sierren|quitar|quita|termina|terminar|apaga|apagar|matar|mata|kill)[,\s]+(?:el\s+navegador\s+(?:de\s+)?|el\s+juego\s+(?:de\s+)?|el\s+proceso\s+(?:de\s+)?|la\s+app\s+(?:de\s+)?|el\s+programa\s+(?:de\s+)?|la\s+aplicaci[oó]n\s+(?:de\s+)?|la\s+ventana\s+(?:de\s+)?|el\s+|la\s+)?([a-zA-Z0-9_\-\.\s]+)$",
+            clean,
+            flags=re.IGNORECASE
+        )
+        if m_app:
+            target = m_app.group(1).strip(" ,:;\t\n").lower()
+            if target and target not in ["un archivo", "un proyecto", "una carpeta", "la sesion", "la sesión", "sesion", "sesión", "el sistema", "la pc", "el equipo"]:
+                if any(conn in f" {target} " for conn in [" y ", " e ", " luego ", " despues ", " después "]):
+                    return None
+                return ActionStep(intent="CLOSE_APP", target=target, parameters=StepParameters())
+
+        return None
+
+    def get_learned_command(self, keyword: str) -> str | None:
+        """Consulta si la instrucción fue aprendida previamente y almacenada en SQLite."""
+        try:
+            from src.routines.db import get_db_cursor
+            with get_db_cursor() as cursor:
+                cursor.execute("SELECT execution_target FROM learned_commands WHERE keyword = ?", (keyword.lower().strip(),))
+                row = cursor.fetchone()
+            if not row:
+                return None
+            target = row[0]
+            if "\\" in target or "/" in target or "%" in target:
+                from src.utils.path_resolver import normalize_user_path
+                norm_p = normalize_user_path(target)
+                if norm_p.exists():
+                    return str(norm_p)
+                return None
+            return target
+        except Exception:
+            return None
 
     def _parse_single_clause(self, clause: str) -> list[ActionStep] | None:
         """Intenta parsear una cláusula o sub-comando individual mediante motores deterministas rápidos."""
@@ -979,6 +1176,9 @@ class IntentParser:
         win = self._fast_window_check(c)
         if win:
             return win if isinstance(win, list) else [win]
+        cls_cmd = self._fast_close_app_check(c)
+        if cls_cmd:
+            return [cls_cmd]
         rel = self._fast_relative_action_check(c)
         if rel:
             return [rel]
@@ -1002,8 +1202,8 @@ class IntentParser:
         if re.search(r"^busca\s+(?:solo\s+todo|solotodo)", clean, flags=re.IGNORECASE):
             return None
 
-        # Si es 'abre X y busca Y', eso es un comando atómico de búsqueda (cubierto por _fast_search_check)
-        if re.search(r"^(?:abre|inicia)\s+[a-zA-Z0-9_\-]+\s+y\s+(?:busca|buscar|encuentra)\s+", clean, flags=re.IGNORECASE):
+        # Si es 'abre X [y] busca Y', eso es un comando atómico de búsqueda (cubierto por _fast_search_check)
+        if re.search(r"^(?:abre|inicia)\s+[a-zA-Z0-9_\-]+\s+(?:y\s+)?(?:busca|buscar|encuentra)\s+", clean, flags=re.IGNORECASE):
             return None
         if re.search(r"^(?:busca|pon|reproduce)\s+.+\s+y\s+(?:reproduce|pon|dale\s+play)", clean, flags=re.IGNORECASE):
             return None
@@ -1011,7 +1211,15 @@ class IntentParser:
         delimiters = [r"\s*,\s*y\s+", r"\s+y\s+", r"\s+e\s+", r"\s+luego\s+", r"\s+despues\s+", r"\s+después\s+", r"\s*,\s*"]
         pattern = "|".join(f"(?:{d})" for d in delimiters)
 
-        parts = [p.strip() for p in re.split(pattern, clean, flags=re.IGNORECASE) if p.strip()]
+        raw_parts = [p.strip() for p in re.split(pattern, clean, flags=re.IGNORECASE) if p.strip()]
+
+        # Subdividir partes si contienen verbos de acción explícitos sin delimitadores (ej: 'abre lol abre youtube')
+        verb_split_pattern = r"\s+(?=(?:abre|abrir|inicia|iniciar|ejecuta|ejecutar|lanza|lanzar|cierra|cerrar|cierre|cierren|sierra|sierre|sierren|da\s+play|dale\s+play|dar\s+play|pon\s+play|ponle\s+play|pausa|pausar|deten|detener|silencia|silenciar)(?:\s+|$))"
+        parts = []
+        for p_str in raw_parts:
+            sub = [s.strip() for s in re.split(verb_split_pattern, p_str, flags=re.IGNORECASE) if s.strip()]
+            parts.extend(sub)
+
         if len(parts) < 2:
             return None
 
@@ -1026,7 +1234,40 @@ class IntentParser:
         return all_steps if all_steps else None
 
     def _normalize_intent(self, raw_intent: str) -> str:
-        raw = str(raw_intent).upper()
+        raw = str(raw_intent).upper().strip()
+        exact_intents = {
+            "CHAT", "WINDOW_CONTROL", "HARDWARE_STATUS",
+            "SPOTIFY_NOW_PLAYING", "SPOTIFY_LIKE", "SPOTIFY_QUEUE",
+            "SET_APP_VOLUME", "SET_VOLUME_PCT", "MUTE_APP", "UNMUTE_APP",
+            "DISCORD_CONNECT_VOICE", "DISCORD_DISCONNECT_VOICE",
+            "VALORANT_STORE", "VALORANT_LOCK",
+            "LOL_ACCEPT", "LOL_DECLINE", "LOL_START_QUEUE", "LOL_CANCEL_QUEUE", "LOL_STATUS", "LOL_PICK", "LOL_BAN",
+            "OBS_START_RECORD", "OBS_STOP_RECORD", "OBS_RECORD", "OBS_REPLAY",
+            "OBSIDIAN_NOTE", "OBSIDIAN_TODO",
+            "VISION_ANALYZE", "GITHUB_ACTIONS", "GITHUB_PRS", "GITHUB_ISSUES", "GITHUB_CREATE_ISSUE",
+            "CODEBASE_ASK", "CODEBASE_INDEX",
+            "GIT_STATUS", "GIT_COMMIT", "GIT_PUSH", "GIT_PULL", "GIT_DIFF", "GIT_BRANCH",
+            "INTERACT_SCREEN", "MEDIA_CONTROL", "SEARCH_CONTENT",
+            "OPEN_APP", "CLOSE_APP", "CREATE_PROJECT", "CREATE_FOLDER",
+            "CREATE_FILE", "WRITE_TEXT", "MODE_SWITCH", "EDITOR_STATUS",
+            "SYSTEM_CONTROL", "FORGET_COMMAND"
+        }
+        if raw in exact_intents:
+            return raw
+        if any(w in raw for w in ["CHAT", "ANSWER", "REPLY", "CONVERS", "RESPON"]):
+            return "CHAT"
+        if any(w in raw for w in ["HARDWARE", "CPU", "GPU", "RAM", "TEMP"]):
+            return "HARDWARE_STATUS"
+        if "SPOTIFY" in raw:
+            if "LIKE" in raw or "FAV" in raw:
+                return "SPOTIFY_LIKE"
+            if "QUEUE" in raw or "COLA" in raw:
+                return "SPOTIFY_QUEUE"
+            return "SPOTIFY_NOW_PLAYING"
+        if "SET_APP_VOLUME" in raw or "APP_VOLUME" in raw:
+            return "SET_APP_VOLUME"
+        if "MUTE_APP" in raw:
+            return "MUTE_APP"
         if any(w in raw for w in ["WINDOW", "VENTANA", "SNAP", "TAB", "PESTAÑA", "PESTANA", "SPLIT", "POSITION", "POSICION", "LAYOUT"]):
             return "WINDOW_CONTROL"
         if any(w in raw for w in ["INTERACT", "LINK", "ENLACE", "RESULTADO", "CLICK_FIRST", "PLAY_FIRST"]):
@@ -1037,26 +1278,150 @@ class IntentParser:
             return "SEARCH_CONTENT"
         if any(w in raw for w in ["FORGET", "OLVID", "BORR", "ELIMIN", "ELMIN"]):
             return "FORGET_COMMAND"
+        if "CREATE_FOLDER" in raw or "FOLDER" in raw or "CARPETA" in raw:
+            return "CREATE_FOLDER"
         if "CREATE_FILE" in raw or "FILE" in raw or "ARCHIVO" in raw:
             return "CREATE_FILE"
         if "WRITE_TEXT" in raw or "WRITE" in raw or "ESCRIB" in raw or "TEXTO" in raw:
             return "WRITE_TEXT"
         if "CREATE_PROJECT" in raw or "CREATE" in raw or "PROJECT" in raw:
             return "CREATE_PROJECT"
+        if any(w in raw for w in ["CLOSE", "CIERRA", "CERRAR", "KILL", "TERMINA", "QUIT"]):
+            return "CLOSE_APP"
         if "OPEN_APP" in raw or "OPEN" in raw:
             return "OPEN_APP"
+        if "MODE" in raw or "MODO" in raw:
+            return "MODE_SWITCH"
         if "SYSTEM" in raw:
             return "SYSTEM_CONTROL"
         return "UNKNOWN"
 
-    def parse(self, text_command: str) -> ParsedPipeline:
+    def _get_gemini_key(self) -> str:
+        import os
+        return (
+            getattr(settings, "GEMINI_API_KEY", "")
+            or os.getenv("GEMINI_API_KEY", "")
+            or os.getenv("GOOGLE_API_KEY", "")
+        ).strip()
+
+    def _call_gemini(self, user_prompt: str) -> dict | None:
+        """Consulta la API de Google Gemini con salida JSON estructurada. Retorna None si no hay clave o conexión."""
+        import urllib.request
+        import urllib.error
+
+        api_key = self._get_gemini_key()
+        if not api_key:
+            return None
+
+        primary_model = getattr(settings, "GEMINI_MODEL", "gemini-3.1-flash-lite") or "gemini-3.1-flash-lite"
+        candidate_models = [primary_model]
+        for fallback_m in ("gemini-3.1-flash-lite", "gemini-3-flash-preview", "gemini-3.8-flash"):
+            if fallback_m not in candidate_models:
+                candidate_models.append(fallback_m)
+
+        payload = {
+            "systemInstruction": {
+                "parts": [{"text": self.system_prompt}]
+            },
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [{"text": user_prompt}]
+                }
+            ],
+            "generationConfig": {
+                "responseMimeType": "application/json",
+                "temperature": 0.25
+            }
+        }
+        encoded_payload = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
+        last_err = None
+        for model_name in candidate_models:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+            req = urllib.request.Request(
+                url,
+                data=encoded_payload,
+                headers={"Content-Type": "application/json"}
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=8) as resp:
+                    raw_body = json.loads(resp.read().decode("utf-8"))
+                    candidates = raw_body.get("candidates") or []
+                    if not candidates:
+                        continue
+                    parts = candidates[0].get("content", {}).get("parts") or []
+                    for part in parts:
+                        text_out = part.get("text", "").strip()
+                        if text_out and text_out.startswith("{"):
+                            return json.loads(text_out)
+                    if parts and parts[0].get("text", "").strip():
+                        return json.loads(parts[0]["text"].strip())
+            except Exception as e:
+                last_err = e
+                continue
+
+        if last_err:
+            raise last_err
+        return None
+
+    def _call_ollama(self, user_prompt: str) -> dict | None:
+        """Consulta el modelo local de Ollama como respaldo offline o motor local."""
+        response = ollama.chat(
+            model=settings.OLLAMA_MODEL,
+            messages=[
+                {"role": "system", "content": self.system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            format="json"
+        )
+        return json.loads(response["message"]["content"])
+
+    def _build_pipeline_from_llm_data(self, text_command: str, data: dict, provider_used: str) -> ParsedPipeline:
+        raw_steps = data.get("steps", [])
+        reply_text = str(data.get("reply", "") or "").strip()
+
+        steps = []
+        for s in raw_steps:
+            params = StepParameters(**(s.get("parameters") or {}))
+            normalized_intent = self._normalize_intent(s.get("intent", "UNKNOWN"))
+            if normalized_intent == "SEARCH_CONTENT" and params.content:
+                params.content = clean_search_term(params.content)
+            if normalized_intent == "CHAT" and not reply_text and params.content:
+                reply_text = params.content.strip()
+            steps.append(ActionStep(
+                intent=normalized_intent,
+                target=str(s.get("target", "")).strip(),
+                parameters=params
+            ))
+
+        # Si el modelo devolvió una respuesta conversacional en 'reply' pero dejó 'steps' vacío, crear paso CHAT
+        if not steps and reply_text:
+            steps.append(ActionStep(
+                intent="CHAT",
+                target="assistant",
+                parameters=StepParameters(content=reply_text)
+            ))
+
+        return ParsedPipeline(
+            raw_text=text_command,
+            steps=steps,
+            confidence=float(data.get("confidence", 1.0)),
+            reply=reply_text,
+            provider_used=provider_used
+        )
+
+    def parse(self, text_command: str, context_prompt: str = "") -> ParsedPipeline:
+        clean_cmd = strip_wake_and_polite(text_command)
+        effective_cmd = clean_cmd if clean_cmd else text_command
+
         # 1. Chequeo rápido de dictado de prompt a agentes de código / IDEs (0ms)
-        fast_prompt = self._fast_prompt_check(text_command)
+        fast_prompt = self._fast_prompt_check(effective_cmd)
         if fast_prompt:
             return fast_prompt
 
         # 1.1 Chequeo rápido de consulta o conexión de editores de código (0ms)
-        fast_editor = self._fast_editor_status_check(text_command)
+        fast_editor = self._fast_editor_status_check(effective_cmd)
         if fast_editor:
             return ParsedPipeline(
                 raw_text=text_command,
@@ -1065,7 +1430,7 @@ class IntentParser:
             )
 
         # 1.2 Chequeo rápido de cambio o consulta de modo de operación (Gamer vs Trabajo) (0ms)
-        fast_mode = self._fast_mode_check(text_command)
+        fast_mode = self._fast_mode_check(effective_cmd)
         if fast_mode:
             return ParsedPipeline(
                 raw_text=text_command,
@@ -1074,7 +1439,7 @@ class IntentParser:
             )
 
         # 1.3 Chequeo rápido de creación de carpetas, bloc de notas y archivos (0ms)
-        fast_creation = self._fast_creation_check(text_command)
+        fast_creation = self._fast_creation_check(effective_cmd)
         if fast_creation:
             return ParsedPipeline(
                 raw_text=text_command,
@@ -1083,7 +1448,7 @@ class IntentParser:
             )
 
         # 2. Chequeo rápido de comandos de ventanas, posicionamiento y pestañas (0ms)
-        fast_window = self._fast_window_check(text_command)
+        fast_window = self._fast_window_check(effective_cmd)
         if fast_window:
             steps = fast_window if isinstance(fast_window, list) else [fast_window]
             return ParsedPipeline(
@@ -1092,8 +1457,17 @@ class IntentParser:
                 confidence=1.0
             )
 
+        # 2.5 Chequeo rápido de comandos de cierre de programas y ventanas (0ms)
+        fast_close = self._fast_close_app_check(effective_cmd)
+        if fast_close:
+            return ParsedPipeline(
+                raw_text=text_command,
+                steps=[fast_close],
+                confidence=1.0
+            )
+
         # 3. Chequeo rápido de integraciones directas (Spotify, Valorant, OBS, Audio Mixer, Hardware, Obsidian) (0ms)
-        fast_integ = self._fast_integration_check(text_command)
+        fast_integ = self._fast_integration_check(effective_cmd)
         if fast_integ:
             return ParsedPipeline(
                 raw_text=text_command,
@@ -1102,7 +1476,7 @@ class IntentParser:
             )
 
         # 4. Chequeo rápido de acciones relativas en pantalla (0ms)
-        fast_relative = self._fast_relative_action_check(text_command)
+        fast_relative = self._fast_relative_action_check(effective_cmd)
         if fast_relative:
             return ParsedPipeline(
                 raw_text=text_command,
@@ -1111,7 +1485,7 @@ class IntentParser:
             )
 
         # 5. Chequeo rápido de control multimedia determinista (0ms)
-        fast_media = self._fast_media_check(text_command)
+        fast_media = self._fast_media_check(effective_cmd)
         if fast_media:
             return ParsedPipeline(
                 raw_text=text_command,
@@ -1120,7 +1494,7 @@ class IntentParser:
             )
 
         # 6. Chequeo rápido de búsqueda determinista (0ms)
-        fast_search = self._fast_search_check(text_command)
+        fast_search = self._fast_search_check(effective_cmd)
         if fast_search:
             return ParsedPipeline(
                 raw_text=text_command,
@@ -1129,7 +1503,7 @@ class IntentParser:
             )
 
         # 7. Chequeo rápido de descomposición de comandos compuestos multi-acción (0ms)
-        fast_compound = self._fast_compound_check(text_command)
+        fast_compound = self._fast_compound_check(effective_cmd)
         if fast_compound:
             return ParsedPipeline(
                 raw_text=text_command,
@@ -1138,7 +1512,7 @@ class IntentParser:
             )
 
         # 8. Chequeo rápido de apertura simple de apps (0ms)
-        fast_open = self._fast_open_app_check(text_command)
+        fast_open = self._fast_open_app_check(effective_cmd)
         if fast_open:
             return ParsedPipeline(
                 raw_text=text_command,
@@ -1146,37 +1520,39 @@ class IntentParser:
                 confidence=1.0
             )
 
-        # 9. Análisis con Ollama para comandos complejos, variados o multi-acción
-        try:
-            response = ollama.chat(
-                model=settings.OLLAMA_MODEL,
-                messages=[
-                    {"role": "system", "content": self.system_prompt},
-                    {"role": "user", "content": f"Comando: '{text_command}'"}
-                ],
-                format="json"
-            )
-            data = json.loads(response["message"]["content"])
-            raw_steps = data.get("steps", [])
-
-            steps = []
-            for s in raw_steps:
-                params = StepParameters(**(s.get("parameters") or {}))
-                normalized_intent = self._normalize_intent(s.get("intent", "UNKNOWN"))
-                if normalized_intent == "SEARCH_CONTENT" and params.content:
-                    params.content = clean_search_term(params.content)
-                steps.append(ActionStep(
-                    intent=normalized_intent,
-                    target=str(s.get("target", "")).strip(),
-                    parameters=params
-                ))
-
+        # 8.5 Chequeo de comandos aprendidos previamente en SQLite (0ms)
+        learned = self.get_learned_command(effective_cmd)
+        if learned:
             return ParsedPipeline(
                 raw_text=text_command,
-                steps=steps,
-                confidence=float(data.get("confidence", 1.0))
+                steps=[ActionStep(intent="OPEN_APP", target=learned, parameters=StepParameters())],
+                confidence=1.0
             )
+
+        # 9. Análisis Inteligente Híbrido: Gemini API (Online) -> Fallback automático a Ollama (Offline)
+        resolved_context = context_prompt() if callable(context_prompt) else context_prompt
+        user_prompt = f"Comando o consulta del usuario: '{effective_cmd}'"
+        if resolved_context:
+            user_prompt += f"\n\nContexto actual del sistema y memoria:\n{resolved_context}"
+
+        provider = getattr(settings, "LLM_PROVIDER", "gemini").lower().strip()
+        if provider != "ollama" and self._get_gemini_key():
+            try:
+                gemini_data = self._call_gemini(user_prompt)
+                if gemini_data:
+                    print(f"[NLU Gemini] Respuesta generada con {getattr(settings, 'GEMINI_MODEL', 'gemini-2.5-flash')}")
+                    return self._build_pipeline_from_llm_data(text_command, gemini_data, provider_used="gemini")
+            except Exception as e:
+                print(f"[NLU Gemini Fallback] Sin acceso a Gemini ({e}), recurriendo a Ollama en modo sin conexión.")
+
+        # Modo sin conexión / Respaldo local con Ollama
+        try:
+            ollama_data = self._call_ollama(user_prompt)
+            if ollama_data:
+                print(f"[NLU Ollama Offline] Respuesta generada con {settings.OLLAMA_MODEL}")
+                return self._build_pipeline_from_llm_data(text_command, ollama_data, provider_used="ollama")
         except Exception as e:
-            print(f"[NLU Error] Fallo al parsear comandos compuestos: {e}")
-            return ParsedPipeline(raw_text=text_command, steps=[])
+            print(f"[NLU Error] Fallo al procesar con Ollama local: {e}")
+
+        return ParsedPipeline(raw_text=text_command, steps=[])
 
