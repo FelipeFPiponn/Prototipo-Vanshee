@@ -55,10 +55,21 @@ class WindowManager:
         "steam": {"keywords": ["steam"], "processes": ["steam.exe", "steam"]},
         "discord": {"keywords": ["discord"], "processes": ["discord.exe", "discord"]},
         "brave": {"keywords": ["brave"], "processes": ["brave.exe", "brave"]},
+        "navegador": {"keywords": ["brave", "chrome", "edge", "firefox", "opera"], "processes": ["brave.exe", "chrome.exe", "msedge.exe", "firefox.exe", "opera.exe"]},
+        "browser": {"keywords": ["brave", "chrome", "edge", "firefox", "opera"], "processes": ["brave.exe", "chrome.exe", "msedge.exe", "firefox.exe", "opera.exe"]},
         "chrome": {"keywords": ["chrome", "google chrome"], "processes": ["chrome.exe", "chrome"]},
         "edge": {"keywords": ["edge", "microsoft edge"], "processes": ["msedge.exe", "msedge"]},
         "firefox": {"keywords": ["firefox", "mozilla firefox"], "processes": ["firefox.exe", "firefox"]},
         "notepad": {"keywords": ["bloc de notas", "notepad"], "processes": ["notepad.exe"]},
+        "opera": {"keywords": ["opera", "opera gx", "operagx"], "processes": ["opera.exe", "opera_gx.exe"]},
+        "opera gx": {"keywords": ["opera gx", "opera", "operagx"], "processes": ["opera.exe", "opera_gx.exe"]},
+        "operagx": {"keywords": ["opera gx", "opera", "operagx"], "processes": ["opera.exe", "opera_gx.exe"]},
+        "calculadora": {"keywords": ["calculadora", "calculator", "calc"], "processes": ["calculatorapp.exe", "calc.exe"]},
+        "calc": {"keywords": ["calculadora", "calculator", "calc"], "processes": ["calculatorapp.exe", "calc.exe"]},
+        "administrador de tareas": {"keywords": ["administrador de tareas", "task manager", "taskmgr"], "processes": ["taskmgr.exe"]},
+        "taskmgr": {"keywords": ["administrador de tareas", "task manager", "taskmgr"], "processes": ["taskmgr.exe"]},
+        "explorador": {"keywords": ["explorador de archivos", "file explorer", "explorer"], "processes": ["explorer.exe"]},
+        "explorer": {"keywords": ["explorador de archivos", "file explorer", "explorer"], "processes": ["explorer.exe"]},
         "terminal": {"keywords": ["windows terminal", "powershell", "símbolo del sistema", "cmd.exe"], "processes": ["windowsterminal.exe", "cmd.exe", "powershell.exe"]},
     }
 
@@ -453,6 +464,8 @@ class WindowManager:
         # Verificar términos de pantalla completa / fullscreen / maximizar antes de remover 'pantalla'
         if any(w in clean for w in ["pantalla completa", "a pantalla completa", "en pantalla completa", "toda la pantalla", "pantalla entera", "fullscreen", "full screen", "maxim", "max"]):
             return "maximize"
+        if any(w in clean for w in ["close", "cierra", "cerrar", "termina"]):
+            return "close"
         if any(w in clean for w in ["minim", "ocult", "min"]):
             return "minimize"
 
@@ -496,6 +509,7 @@ class WindowManager:
             "center": "el centro de la pantalla",
             "maximize": "pantalla completa",
             "minimize": "modo minimizado",
+            "close": "cerrada",
             "restore": "tamaño normal",
         }
         return labels.get(pos, pos)
@@ -507,6 +521,9 @@ class WindowManager:
         norm_pos = self._normalize_position(position)
         if not norm_pos:
             return False
+
+        if norm_pos == "close":
+            return self.close_window(hwnd)
 
         self.focus_window(hwnd)
         time.sleep(0.06)
@@ -742,4 +759,168 @@ class WindowManager:
             pyautogui.hotkey("ctrl", "shift", "t")
             return True, "Última pestaña cerrada recuperada."
         return False, f"Acción de pestaña no reconocida: '{action}'."
+
+    def close_window(self, hwnd: int) -> bool:
+        """Cierra limpiamente una ventana mediante mensaje nativo WM_CLOSE."""
+        if not hwnd:
+            return False
+        try:
+            if win32gui and win32con:
+                win32gui.PostMessage(hwnd, win32con.WM_CLOSE, 0, 0)
+                return True
+            elif ctypes:
+                ctypes.windll.user32.PostMessageW(hwnd, 0x0010, 0, 0)  # WM_CLOSE
+                return True
+        except Exception as e:
+            print(f"[WindowManager Error] Error al cerrar ventana hwnd={hwnd}: {e}")
+        if pyautogui:
+            try:
+                self.focus_window(hwnd)
+                pyautogui.hotkey("alt", "f4")
+                return True
+            except Exception:
+                pass
+        return False
+
+    def close_active_window(self) -> tuple[bool, str]:
+        """Cierra la ventana activa que se encuentra actualmente en primer plano."""
+        hwnd = 0
+        title = ""
+        if win32gui:
+            try:
+                hwnd = win32gui.GetForegroundWindow()
+                if hwnd:
+                    title = win32gui.GetWindowText(hwnd).strip()
+            except Exception:
+                pass
+        if not hwnd and gw:
+            try:
+                act = gw.getActiveWindow()
+                if act:
+                    hwnd = getattr(act, "_hWnd", 0)
+                    title = act.title
+            except Exception:
+                pass
+
+        if not hwnd:
+            if pyautogui:
+                pyautogui.hotkey("alt", "f4")
+                return True, "Ventana activa cerrada."
+            return False, "No detecté ninguna ventana activa para cerrar."
+
+        if self._is_self_window(title):
+            return False, "No puedo cerrar la ventana principal de Vanshee mediante este comando."
+
+        ok = self.close_window(hwnd)
+        display_title = title if len(title) < 35 else title[:32] + "..."
+        if ok:
+            return True, f"Ventana '{display_title}' cerrada."
+        return False, f"No se pudo cerrar la ventana '{display_title}'."
+
+    def close_app(self, target: str) -> tuple[bool, str]:
+        """Cierra todas las ventanas o procesos asociados a una aplicación específica (ej: 'Opera GX', 'Discord', 'Notepad')."""
+        clean_target = (target or "").lower().strip()
+        if not clean_target or clean_target in [
+            "active", "activa", "actual", "esta", "esta ventana", "la ventana", 
+            "la ventana actual", "ventana actual", "esto", "ventana"
+        ]:
+            return self.close_active_window()
+
+        # Determinar procesos y palabras clave asociados al alias
+        target_procs = set()
+        keywords = {clean_target}
+        for a_k, a_v in self.TARGET_ALIASES.items():
+            if a_k in clean_target or clean_target in a_k:
+                target_procs.update(a_v.get("processes", []))
+                keywords.update(a_v.get("keywords", []))
+            for kw in a_v.get("keywords", []):
+                if kw in clean_target or clean_target in kw:
+                    target_procs.update(a_v.get("processes", []))
+                    keywords.update(a_v.get("keywords", []))
+
+        # Añadir palabras individuales relevantes (ej: 'opera' desde 'opera gx')
+        for word in clean_target.split():
+            if len(word) >= 4:
+                keywords.add(word)
+
+        # Búsqueda dinámica en AppIndexer para asociar ejecutables de cualquier app del sistema
+        try:
+            from src.executor.app_indexer import AppIndexer
+            app_idx = AppIndexer()
+            found_path = app_idx.find_app(clean_target)
+            if found_path:
+                import os
+                p_base = os.path.basename(found_path).lower()
+                if p_base.endswith(".exe"):
+                    target_procs.add(p_base)
+                elif p_base.endswith(".lnk"):
+                    clean_stem = p_base.replace(".lnk", "").replace("navegador", "").strip().lower()
+                    target_procs.add(f"{clean_stem}.exe")
+                    target_procs.add(f"{clean_stem.replace(' ', '')}.exe")
+                    target_procs.add(f"{clean_stem.replace(' ', '_')}.exe")
+                    keywords.add(clean_stem)
+        except Exception:
+            pass
+
+        closed_count = 0
+        windows = self.get_open_windows()
+        for w in windows:
+            if self._is_self_window(w.get("title", ""), w.get("pid", 0)):
+                continue
+            t_low = w.get("title", "").lower()
+            matched = any(kw in t_low for kw in keywords)
+            if not matched and target_procs:
+                matched = any(tp.lower().replace(".exe", "") in t_low for tp in target_procs)
+
+            if matched and w.get("hwnd"):
+                if self.close_window(w["hwnd"]):
+                    closed_count += 1
+
+        if closed_count > 0:
+            time.sleep(0.12)
+
+        # Cierre y terminación limpia de procesos residuales en segundo plano
+        terminated_count = 0
+        try:
+            import psutil
+            for proc in psutil.process_iter(["pid", "name"]):
+                try:
+                    p_name = proc.info["name"].lower()
+                    # Protecciones del sistema y de Vanshee
+                    if any(safe in p_name for safe in ["antigravity", "vanshee", "python", "system", "registry", "svchost"]):
+                        if clean_target not in ["antigravity", "vanshee"]:
+                            continue
+                    if any(tp.lower() == p_name or tp.lower() in p_name for tp in target_procs) or (
+                        clean_target in p_name and clean_target not in ["python", "python.exe", "code", "system", "cmd", "antigravity", "antigravity ide", "vanshee"]
+                    ):
+                        proc.terminate()
+                        terminated_count += 1
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        if closed_count > 0 or terminated_count > 0:
+            return True, f"Programa '{target}' cerrado correctamente."
+
+        # Fallback con comando del sistema si se conoce el proceso
+        for proc_name in target_procs:
+            try:
+                import subprocess
+                res = subprocess.run(["taskkill", "/f", "/im", proc_name], capture_output=True, text=True)
+                if res.returncode == 0:
+                    return True, f"Programa '{target}' cerrado correctamente."
+            except Exception:
+                pass
+
+        return False, f"No encontré ninguna ventana o proceso abierto de '{target}'."
+
+    def minimize_active_window(self) -> tuple[bool, str]:
+        """Minimiza la ventana activa en primer plano."""
+        return self.snap_window(target="active", position="minimize")
+
+    def minimize_app(self, target: str) -> tuple[bool, str]:
+        """Minimiza una aplicación específica o la ventana actual."""
+        return self.snap_window(target=target, position="minimize")
+
 

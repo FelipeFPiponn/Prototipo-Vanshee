@@ -17,46 +17,51 @@ class ContextSnapshot:
 
 
 class ContextAwarenessEngine:
-    """Interpreta el estado actual del escritorio y genera asistencia contextual."""
+    """Interpreta el estado actual del escritorio y genera asistencia contextual de baja latencia."""
 
     def __init__(self, screen_mapper: ScreenMapper | None = None):
         init_db()
         self.screen_mapper = screen_mapper or ScreenMapper()
         self.db_path = settings.DB_PATH
 
-    def observe(self, action_hint: str = "", user_command: str = "") -> ContextSnapshot:
-        context = self.screen_mapper.map_screen_context(action_hint=action_hint)
+    def observe(self, action_hint: str = "", user_command: str = "", log_db: bool = False) -> ContextSnapshot:
+        context = self.screen_mapper.map_screen_context(action_hint=action_hint, capture_image=False)
         app_name = self._infer_app_name(context.get("window_title", ""), action_hint)
         suggestion = self._suggest_next_step(app_name, context.get("window_title", ""), user_command)
 
         snapshot = ContextSnapshot(
             app_name=app_name,
             window_title=context.get("window_title", ""),
-            screen_size=context.get("screen_size", (0, 0)),
+            screen_size=context.get("screen_size", (1920, 1080)),
             confidence=context.get("confidence", 0.0),
             suggestion=suggestion,
         )
-        self.log_context(snapshot, action_hint=action_hint, user_command=user_command)
+        # Solo registrar en SQLite cuando hay un comando real del usuario o se solicita explícitamente
+        if log_db or (user_command and action_hint not in ("ui_poll", "status", "ws_connect", "idle", "parse_only")):
+            self.log_context(snapshot, action_hint=action_hint, user_command=user_command)
         return snapshot
 
     def log_context(self, snapshot: ContextSnapshot, action_hint: str = "", user_command: str = "", response: str = ""):
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
-                """
-                INSERT INTO context_events (
-                    app_name, window_title, action_hint, user_command, assistant_response, confidence
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.execute(
+                    """
+                    INSERT INTO context_events (
+                        app_name, window_title, action_hint, user_command, assistant_response, confidence
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        snapshot.app_name,
+                        snapshot.window_title,
+                        action_hint,
+                        user_command,
+                        response or snapshot.suggestion,
+                        snapshot.confidence,
+                    ),
                 )
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    snapshot.app_name,
-                    snapshot.window_title,
-                    action_hint,
-                    user_command,
-                    response or snapshot.suggestion,
-                    snapshot.confidence,
-                ),
-            )
+        except Exception:
+            pass
 
     def _infer_app_name(self, window_title: str, action_hint: str = "") -> str:
         text = f"{window_title} {action_hint}".lower()
@@ -64,6 +69,8 @@ class ContextAwarenessEngine:
             return "spotify"
         if any(word in text for word in ["youtube", "youtu.be"]):
             return "youtube"
+        if "antigravity" in text:
+            return "antigravity"
         if any(word in text for word in ["visual studio code", " vs code", "vscode", " - code", "code"]):
             return "vscode"
         if "steam" in text:
@@ -86,13 +93,13 @@ class ContextAwarenessEngine:
                 return "Detecto YouTube activo. ¿Deseas que reproduzca tu búsqueda o selección reciente?"
             return "Detecto YouTube activo. ¿Deseas ver o escuchar algo en particular?"
 
-        if app_name == "vscode":
+        if app_name in ("vscode", "antigravity"):
             if any(word in command for word in ["archivo", "file", "crear", "nuevo"]):
-                return "Detecto VS Code activo. Puedo crear el archivo en la carpeta que indiques y abrirlo en el editor."
-            return "Detecto VS Code activo. Puedo ayudarte a crear archivos, proyectos o abrir una ruta concreta."
+                return "Detecto tu editor de código activo. Puedo crear el archivo en la carpeta que indiques y abrirlo."
+            return "Detecto tu editor de código activo. Puedo ayudarte a crear archivos, proyectos o enviar prompts."
 
         if app_name == "steam":
-            return "Detecto Steam activo. Puedo abrir un juego instalado o lanzar Counter-Strike 2 si lo indicas."
+            return "Detecto Steam activo. Puedo abrir cualquier juego instalado."
 
         if app_name == "word":
             return "Detecto Word activo. Puedo preparar texto, crear documentos o ayudarte a organizar el contenido."

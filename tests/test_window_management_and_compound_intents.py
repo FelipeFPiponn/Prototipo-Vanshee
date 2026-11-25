@@ -255,6 +255,88 @@ class TestWindowManagementAndCompoundIntents(unittest.TestCase):
             mock_set_pos.assert_any_call(101, "left")
             mock_set_pos.assert_any_call(102, "right")
 
+    def test_19_multiple_apps_and_independent_media_control(self):
+        """Verifica que 'abre League of Legends, abre YouTube y da play en Spotify' no busque LoL en YouTube/Spotify."""
+        p1 = self.parser.parse("Banshee, abre League of Legends, abre YouTube y da play en Spotify.")
+        self.assertEqual(len(p1.steps), 3)
+        self.assertEqual(p1.steps[0].intent, "OPEN_APP")
+        self.assertEqual(p1.steps[0].target, "league of legends")
+        self.assertEqual(p1.steps[1].intent, "OPEN_APP")
+        self.assertEqual(p1.steps[1].target, "youtube")
+        self.assertEqual(p1.steps[2].intent, "MEDIA_CONTROL")
+        self.assertEqual(p1.steps[2].target, "play")
+        self.assertNotIn("SEARCH_CONTENT", [s.intent for s in p1.steps])
+
+        # Caso sin comas procedente de transcripción STT continua
+        p2 = self.parser.parse("abre league of legends abre youtube y da play en spotify")
+        self.assertEqual(len(p2.steps), 3)
+        self.assertEqual(p2.steps[0].intent, "OPEN_APP")
+        self.assertEqual(p2.steps[1].intent, "OPEN_APP")
+        self.assertEqual(p2.steps[2].intent, "MEDIA_CONTROL")
+        self.assertNotIn("SEARCH_CONTENT", [s.intent for s in p2.steps])
+
+    def test_20_close_app_and_window_parsing(self):
+        """Verifica la correcta interpretación y parsing de comandos de cierre."""
+        cases = [
+            ("cierra Brave", "CLOSE_APP", "brave", ""),
+            ("cerrar Brave", "CLOSE_APP", "brave", ""),
+            ("cierra el navegador Brave", "CLOSE_APP", "brave", ""),
+            ("cierra la aplicación de Brave", "CLOSE_APP", "brave", ""),
+            ("cierra la ventana de Brave", "CLOSE_APP", "brave", ""),
+            ("sierra Brave", "CLOSE_APP", "brave", ""),
+            ("cierra el juego League of Legends", "CLOSE_APP", "league of legends", ""),
+            ("cierra la ventana", "WINDOW_CONTROL", "active", "close"),
+            ("cierra esta ventana", "WINDOW_CONTROL", "active", "close"),
+            ("cierra la ventana actual", "WINDOW_CONTROL", "active", "close"),
+            ("cierra esto", "WINDOW_CONTROL", "active", "close"),
+            ("cierra la pestaña", "WINDOW_CONTROL", "close_tab", ""),
+            ("cierra esta pestaña", "WINDOW_CONTROL", "close_tab", ""),
+        ]
+        for cmd, exp_intent, exp_target, exp_pos in cases:
+            p = self.parser.parse(cmd)
+            self.assertEqual(len(p.steps), 1, f"Fallo al parsear '{cmd}'")
+            self.assertEqual(p.steps[0].intent, exp_intent, f"Intent incorrecto para '{cmd}'")
+            self.assertEqual(p.steps[0].target, exp_target, f"Target incorrecto para '{cmd}'")
+            self.assertEqual(p.steps[0].parameters.position, exp_pos, f"Position incorrecta para '{cmd}'")
+
+    def test_21_close_app_execution(self):
+        """Verifica que OSExecutor ejecute la acción CLOSE_APP delegando a window_manager.close_app."""
+        executor = OSExecutor()
+        with patch.object(executor.window_manager, "close_app", return_value=(True, "Programa 'brave' cerrado correctamente.")) as mock_close:
+            step = ActionStep(intent="CLOSE_APP", target="brave", parameters=StepParameters())
+            pipeline = ParsedPipeline(raw_text="cierra brave", steps=[step])
+            success = executor.execute_pipeline(pipeline)
+            self.assertTrue(success)
+            mock_close.assert_called_once_with("brave")
+            self.assertIn("brave", executor.last_action_message)
+
+    def test_22_close_active_window_execution(self):
+        """Verifica que WINDOW_CONTROL con posición 'close' y target 'active' llame a close_active_window."""
+        executor = OSExecutor()
+        with patch.object(executor.window_manager, "close_active_window", return_value=(True, "Ventana activa cerrada.")) as mock_close_win:
+            step = ActionStep(intent="WINDOW_CONTROL", target="active", parameters=StepParameters(position="close"))
+            pipeline = ParsedPipeline(raw_text="cierra la ventana", steps=[step])
+            success = executor.execute_pipeline(pipeline)
+            self.assertTrue(success)
+            mock_close_win.assert_called_once()
+            self.assertIn("Ventana activa cerrada", executor.last_action_message)
+
+    def test_23_window_manager_close_app_logic(self):
+        """Verifica que WindowManager.close_app detecte ventanas coincidentes y cierre el hwnd."""
+        mock_windows = [
+            {"hwnd": 5555, "title": "Brave - YouTube", "pid": 1234},
+            {"hwnd": 6666, "title": "Discord", "pid": 4321}
+        ]
+        with patch.object(self.wm, "get_open_windows", return_value=mock_windows), \
+             patch.object(self.wm, "_is_self_window", return_value=False), \
+             patch.object(self.wm, "close_window", return_value=True) as mock_close_win, \
+             patch("psutil.process_iter", return_value=[]):
+            success, msg = self.wm.close_app("brave")
+            self.assertTrue(success)
+            mock_close_win.assert_called_once_with(5555)
+            self.assertIn("brave", msg.lower())
+
 
 if __name__ == "__main__":
     unittest.main()
+

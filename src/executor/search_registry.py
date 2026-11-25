@@ -106,30 +106,27 @@ class SearchProviderRegistry:
 
     def _load_learned_providers(self):
         try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            cursor.execute("SELECT target_key, provider_json FROM learned_search_providers")
-            for row in cursor.fetchall():
-                data = json.loads(row[1])
-                provider = SearchProvider(**data)
-                self.providers[row[0]] = provider
-            conn.close()
+            from src.routines.db import get_db_cursor
+            with get_db_cursor() as cursor:
+                cursor.execute("SELECT target_key, provider_json FROM learned_search_providers")
+                for row in cursor.fetchall():
+                    data = json.loads(row[1])
+                    provider = SearchProvider(**data)
+                    self.providers[row[0]] = provider
         except Exception as e:
             print(f"[SearchRegistry Warning] Error cargando proveedores aprendidos: {e}")
 
     def save_learned_provider(self, provider: SearchProvider):
         try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                INSERT OR REPLACE INTO learned_search_providers (target_key, provider_json)
-                VALUES (?, ?)
-                """,
-                (provider.id, json.dumps(asdict(provider)))
-            )
-            conn.commit()
-            conn.close()
+            from src.routines.db import get_db_cursor
+            with get_db_cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT OR REPLACE INTO learned_search_providers (target_key, provider_json)
+                    VALUES (?, ?)
+                    """,
+                    (provider.id, json.dumps(asdict(provider)))
+                )
             self.providers[provider.id] = provider
             print(f"[SearchRegistry] Nuevo proveedor aprendido y guardado: '{provider.name}'")
         except Exception as e:
@@ -191,26 +188,46 @@ class SearchProviderRegistry:
         return None
 
     def infer_and_register_with_llm(self, target: str) -> Optional[SearchProvider]:
-        """Aprende de forma autónoma una nueva regla de búsqueda mediante Ollama."""
+        """Aprende de forma autónoma una nueva regla de búsqueda mediante Gemini (Online) u Ollama (Offline)."""
+        prompt = (
+            f"El usuario quiere buscar contenido en el servicio o aplicación '{target}' en Windows OS.\n"
+            "Genera la plantilla de búsqueda en JSON estricto con los siguientes campos:\n"
+            "- id: identificador corto en minúsculas (ej: 'twitch', 'amazon')\n"
+            "- name: nombre legible de la app (ej: 'Twitch')\n"
+            "- aliases: lista de posibles alias\n"
+            "- app_uri: esquema URI de Windows con marcador {{query}} si existe (ej: 'spotify:search:{{query}}') o null\n"
+            "- web_url: URL web con marcador {{query}} (ej: 'https://www.twitch.tv/search?term={{query}}')\n"
+            "- window_keywords: lista de palabras clave que suelen aparecer en el título de ventana\n"
+            "- prefer_desktop: true si suele usarse como app de escritorio, false si es principalmente web\n"
+        )
+        data = None
+        api_key = getattr(settings, "GEMINI_API_KEY", "").strip()
+        if getattr(settings, "LLM_PROVIDER", "gemini") != "ollama" and api_key:
+            try:
+                import urllib.request
+                model_name = getattr(settings, "GEMINI_MODEL", "gemini-3.1-flash-lite") or "gemini-3.1-flash-lite"
+                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+                payload = json.dumps({
+                    "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                    "generationConfig": {"responseMimeType": "application/json", "temperature": 0.1}
+                }).encode("utf-8")
+                req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    raw_body = json.loads(resp.read().decode("utf-8"))
+                    text_out = raw_body["candidates"][0]["content"]["parts"][0]["text"].strip()
+                    data = json.loads(text_out)
+            except Exception:
+                data = None
+
         try:
-            import ollama
-            prompt = (
-                f"El usuario quiere buscar contenido en el servicio o aplicación '{target}' en Windows OS.\n"
-                "Genera la plantilla de búsqueda en JSON estricto con los siguientes campos:\n"
-                "- id: identificador corto en minúsculas (ej: 'twitch', 'amazon')\n"
-                "- name: nombre legible de la app (ej: 'Twitch')\n"
-                "- aliases: lista de posibles alias\n"
-                "- app_uri: esquema URI de Windows con marcador {{query}} si existe (ej: 'spotify:search:{{query}}') o null\n"
-                "- web_url: URL web con marcador {{query}} (ej: 'https://www.twitch.tv/search?term={{query}}')\n"
-                "- window_keywords: lista de palabras clave que suelen aparecer en el título de ventana\n"
-                "- prefer_desktop: true si suele usarse como app de escritorio, false si es principalmente web\n"
-            )
-            response = ollama.chat(
-                model=settings.OLLAMA_MODEL,
-                messages=[{"role": "system", "content": prompt}],
-                format="json"
-            )
-            data = json.loads(response["message"]["content"])
+            if not data:
+                import ollama
+                response = ollama.chat(
+                    model=settings.OLLAMA_MODEL,
+                    messages=[{"role": "system", "content": prompt}],
+                    format="json"
+                )
+                data = json.loads(response["message"]["content"])
             data["prefer_desktop"] = bool(data.get("prefer_desktop", False))
             provider = SearchProvider(**data)
             self.save_learned_provider(provider)

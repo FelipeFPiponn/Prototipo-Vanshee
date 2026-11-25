@@ -1,4 +1,6 @@
 import os
+import re
+import random
 import subprocess
 import webbrowser
 import urllib.parse
@@ -80,15 +82,19 @@ class OSExecutor:
                     continue
                 if "FORGET" in s.intent.upper() and ("busca" in pipeline.raw_text.lower() or "youtube" in pipeline.raw_text.lower() or "spotify" in pipeline.raw_text.lower()):
                     continue
-                if "MEDIA" in s.intent.upper() and ("busca" in pipeline.raw_text.lower() or "youtube" in pipeline.raw_text.lower() or "reproduce" in pipeline.raw_text.lower()):
-                    print(f"[OSExecutor Optimización] Omitiendo MEDIA_CONTROL en pipeline de búsqueda/reproducción para no interferir con la música de fondo.")
-                    continue
+                if "MEDIA" in s.intent.upper():
+                    target_media = s.target.lower().strip()
+                    # Si el control multimedia es explícitamente para una app distinta a la de búsqueda, preservarlo
+                    is_same_target = any(st in target_media for st in search_targets)
+                    is_generic_redundant = target_media in ["play", "media", ""] and not any(app in pipeline.raw_text.lower() for app in ["spotify", "musica", "música"])
+                    if is_same_target or is_generic_redundant:
+                        print(f"[OSExecutor Optimización] Omitiendo MEDIA_CONTROL redundante en pipeline de búsqueda/reproducción para no interferir con la música de fondo.")
+                        continue
                 filtered_steps.append(s)
             pipeline.steps = filtered_steps
 
         overall_success = True
         print(f"\n[OSExecutor] Ejecutando pipeline de {len(pipeline.steps)} acción(es)...")
-        self._announce_context(action_hint="pipeline", user_command=pipeline.raw_text, ask=False)
 
         for idx, step in enumerate(pipeline.steps, start=1):
             print(f" -> Paso {idx}: Intent='{step.intent}' | Target='{step.target}'")
@@ -121,7 +127,7 @@ class OSExecutor:
             return success
 
         # Integraciones directas de alta velocidad (Spotify, Valorant, League of Legends, Discord, OBS, Audio Mixer, Hardware, Obsidian)
-        elif any(intent.startswith(p) for p in ["GIT_", "SPOTIFY_", "VALORANT_", "LOL_", "DISCORD_", "OBS_", "OBSIDIAN_", "HARDWARE_", "AUDIO_", "SET_APP_VOLUME", "SET_VOLUME_PCT", "MUTE_APP", "UNMUTE_APP"]):
+        elif any(intent.startswith(p) for p in ["VISION_", "GITHUB_", "CODEBASE_", "GIT_", "SPOTIFY_", "VALORANT_", "LOL_", "DISCORD_", "OBS_", "OBSIDIAN_", "HARDWARE_", "AUDIO_", "SET_APP_VOLUME", "SET_VOLUME_PCT", "MUTE_APP", "UNMUTE_APP"]):
             vol_val = 50.0
             if step.parameters.content.isdigit():
                 vol_val = float(step.parameters.content)
@@ -139,6 +145,14 @@ class OSExecutor:
             self._speak(msg)
             return success
 
+        # Cierre de aplicaciones y ventanas
+        elif "CLOSE" in intent or intent in ["CLOSE_APP", "QUIT_APP", "TERMINATE_APP"]:
+            success, msg = self.window_manager.close_app(target)
+            self.last_action_message = msg
+            print(f"[OSExecutor Cerrar App] {msg}")
+            self._speak(msg)
+            return success
+
         elif "WINDOW" in intent or "SNAP" in intent or intent in ["WINDOW_CONTROL", "SNAP_WINDOW", "POSITION_WINDOW"]:
             target_pos = step.parameters.position or step.parameters.content
             target_app = target
@@ -147,6 +161,18 @@ class OSExecutor:
             if not target_pos and self.window_manager._normalize_position(target_app):
                 target_pos = target_app
                 target_app = "active"
+
+            # Chequear si es una acción de cerrar ventana o app
+            norm_pos = self.window_manager._normalize_position(target_pos)
+            if norm_pos == "close" or target_pos in ["close", "cerrar"] or target_app in ["close", "cerrar"]:
+                if target_app in ["active", "activa", "actual", "esta", "esta ventana", "la ventana", "la ventana actual", "ventana actual", "esto", "close", "cerrar", ""]:
+                    success, msg = self.window_manager.close_active_window()
+                else:
+                    success, msg = self.window_manager.close_app(target_app)
+                self.last_action_message = msg
+                print(f"[OSExecutor Cerrar Ventana] {msg}")
+                self._speak(msg)
+                return success
 
             # Chequear si es una acción de ordenar / organizar ventanas (mosaico o división automática)
             if target_app in ["tile", "organize", "order", "ordena", "organiza"] or target_pos in ["tile", "organize", "mosaico"]:
@@ -232,6 +258,13 @@ class OSExecutor:
             self._speak(msg)
             return True
 
+        elif intent == "CHAT":
+            msg = step.parameters.content.strip() or "Aquí estoy para ayudarte."
+            self.last_action_message = msg
+            print(f"[OSExecutor Chat] {msg}")
+            self._speak(msg)
+            return True
+
         print(f"[OSExecutor Error] Intent no reconocido o no soportado: '{step.intent}'")
         self.last_action_message = f"Instrucción no soportada: {step.intent}"
         return False
@@ -265,46 +298,99 @@ class OSExecutor:
     def _handle_media_control(self, step: ActionStep) -> bool:
         """Ejecuta acciones multimedia nativas globales en Windows (Play/Pausa, Siguiente, Mute, Volumen)."""
         action = step.target.lower().strip()
-        if action in ["pause", "pausa", "pausar", "detener", "stop", "play_pause", "playpause"]:
+        content = (step.parameters.content or "").lower().strip()
+
+        # Control específico orientado a Spotify
+        if action == "spotify" or content == "spotify" or "spotify" in action:
+            sp = self.integration_router.spotify._get_sp_client()
+            if content in ["pause", "pausa", "stop", "detener"]:
+                if sp:
+                    try:
+                        sp.pause_playback()
+                        self.last_action_message = "Música pausada en Spotify."
+                        print(f"[OSExecutor Spotify Direct] {self.last_action_message}")
+                        return True
+                    except Exception:
+                        pass
+                self._send_media_key(0xB3, "playpause")
+                self.last_action_message = "Música pausada en Spotify."
+                print(f"[OSExecutor] {self.last_action_message}")
+                return True
+            else:
+                if sp:
+                    try:
+                        sp.start_playback()
+                        self.last_action_message = "Reanudando reproducción en Spotify."
+                        print(f"[OSExecutor Spotify Direct] {self.last_action_message}")
+                        return True
+                    except Exception:
+                        pass
+                self._send_media_key(0xB3, "playpause")
+                self.last_action_message = "Reanudando reproducción en Spotify."
+                print(f"[OSExecutor] {self.last_action_message}")
+                return True
+
+        if action in ["pause", "pausa", "pausar", "detener", "stop", "play_pause", "playpause"] or content in ["pause", "pausa"]:
             self._send_media_key(0xB3, "playpause")
-            self.last_action_message = "Música / reproducción pausada."
+            self.last_action_message = random.choice([
+                "¡Listo! Música en pausa.",
+                "¡Pausado! Cuando quieras seguimos.",
+                "¡Claro! Deteniendo la reproducción."
+            ])
             print(f"[OSExecutor] {self.last_action_message}")
             return True
-        elif action in ["play", "reproducir", "reanudar", "resume", "continuar"]:
+        elif action in ["play", "reproducir", "reanudar", "resume", "continuar"] or content in ["play", "reproducir", "reanudar"]:
             self._send_media_key(0xB3, "playpause")
-            self.last_action_message = "Reanudando reproducción."
+            self.last_action_message = random.choice([
+                "¡Claro! Reanudando la música.",
+                "¡Dándole play! Que siga la música.",
+                "¡Listo! Reproduciendo de nuevo."
+            ])
             print(f"[OSExecutor] {self.last_action_message}")
             return True
         elif action in ["next", "siguiente", "skip", "avanzar"]:
             self._send_media_key(0xB0, "nexttrack")
-            self.last_action_message = "Siguiente pista."
+            self.last_action_message = random.choice([
+                "¡Pasando a la siguiente canción!",
+                "¡Claro, siguiente pista!",
+                "¡Cambiando de canción!"
+            ])
             print(f"[OSExecutor] {self.last_action_message}")
             return True
         elif action in ["previous", "prev", "anterior", "retroceder"]:
             self._send_media_key(0xB1, "prevtrack")
-            self.last_action_message = "Pista anterior."
+            self.last_action_message = random.choice([
+                "¡Volviendo a la pista anterior!",
+                "¡Claro, canción anterior!"
+            ])
             print(f"[OSExecutor] {self.last_action_message}")
             return True
         elif action in ["mute", "silenciar", "silencio", "unmute"]:
             self._send_media_key(0xAD, "volumemute")
-            self.last_action_message = "Audio silenciado / activado."
+            self.last_action_message = "¡Listo! Cambiando el silencio del audio."
             print(f"[OSExecutor] {self.last_action_message}")
             return True
         elif action in ["volume_up", "subir_volumen", "subir", "mas_volumen"]:
             for _ in range(3):
                 self._send_media_key(0xAF, "volumeup")
-            self.last_action_message = "Volumen aumentado."
+            self.last_action_message = random.choice([
+                "¡Subiendo un poco el volumen!",
+                "¡Claro, dándole más volumen!"
+            ])
             print(f"[OSExecutor] {self.last_action_message}")
             return True
         elif action in ["volume_down", "bajar_volumen", "bajar", "menos_volumen"]:
             for _ in range(3):
                 self._send_media_key(0xAE, "volumedown")
-            self.last_action_message = "Volumen disminuido."
+            self.last_action_message = random.choice([
+                "¡Bajando un poco el volumen!",
+                "¡Listo, volumen más suave!"
+            ])
             print(f"[OSExecutor] {self.last_action_message}")
             return True
         else:
             self._send_media_key(0xB3, "playpause")
-            self.last_action_message = "Control multimedia aplicado."
+            self.last_action_message = "¡Listo! Control multimedia aplicado."
             print(f"[OSExecutor] {self.last_action_message}")
             return True
 
@@ -321,6 +407,16 @@ class OSExecutor:
                     break
         if not query:
             query = step.target
+
+        # Si no hay término de búsqueda o es idéntico a la plataforma, abrir la app directamente
+        clean_q = clean_search_term(query).lower() if query else ""
+        if not clean_q or clean_q in [target, "youtube", "spotify", "google", "navegador", "buscador", "internet", "web"]:
+            print(f"[OSExecutor] No hay término de búsqueda específico para '{target}', abriendo la aplicación/servicio directamente.")
+            return self._launch_target(target)
+
+        # Si el término es en realidad una acción de control multimedia
+        if clean_q in ["play", "pausa", "pausar", "reproduce", "reproducir", "reanudar", "reanuda"]:
+            return self._handle_media_control(ActionStep(intent="MEDIA_CONTROL", target=target, parameters=StepParameters(content=clean_q)))
 
         raw_query = query
         # Limpieza de prefijos de relleno ('canciones de', 'videos de', etc.)
@@ -346,24 +442,40 @@ class OSExecutor:
 
     def _launch_target(self, target: str, position: str = "") -> bool:
         target_clean = target.lower().strip()
+        is_new_window_request = (
+            position == "new_window" or
+            "nueva ventana" in target_clean or
+            "nuevo proyecto" in target_clean or
+            "proyecto nuevo" in target_clean
+        )
 
-        # 0. Priorizar ventana o app que ya esté abierta en el sistema
-        focused, win_title = self.window_manager.find_and_focus(target_clean)
-        if focused:
-            if position:
-                self.window_manager.snap_window(target_clean, position)
-                norm_pos = self.window_manager._normalize_position(position)
-                pos_label = self.window_manager._position_label(norm_pos)
-                msg = f"{target} ya estaba abierto; pasando a primer plano en {pos_label}."
-            else:
-                msg = f"{target} ya estaba abierto; pasando a primer plano."
-            print(f"[OSExecutor Ventana Abierta] {msg} ('{win_title}')")
-            self.last_action_message = msg
-            return True
+        # 0. Priorizar ventana o app que ya esté abierta en el sistema (salvo si se pidió explícitamente nueva ventana/proyecto)
+        if not is_new_window_request:
+            focused, win_title = self.window_manager.find_and_focus(target_clean)
+            if focused:
+                if position:
+                    self.window_manager.snap_window(target_clean, position)
+                    norm_pos = self.window_manager._normalize_position(position)
+                    pos_label = self.window_manager._position_label(norm_pos)
+                    msg = random.choice([
+                        f"¡Ya tenías {target} abierto! Te lo acomodo en {pos_label}.",
+                        f"¡Listo! Pasando {target} al frente en {pos_label}."
+                    ])
+                else:
+                    msg = random.choice([
+                        f"¡Ya tenías {target} abierto! Te lo traigo al frente.",
+                        f"¡Aquí tienes {target}! Ya estaba abierto.",
+                        f"¡Enseguida! Pasando {target} a primer plano."
+                    ])
+                print(f"[OSExecutor Ventana Abierta] {msg} ('{win_title}')")
+                self.last_action_message = msg
+                return True
 
-        execution_target, target_type = self.resolver.resolve(target)
+        # Si era petición de nueva ventana, limpiar el nombre del target
+        clean_resolve_target = re.sub(r"^(?:una?\s+)?(?:nueva\s+ventana|nuevo\s+proyecto|proyecto\s+nuevo)\s+(?:en|de)\s+", "", target_clean).strip()
+        execution_target, target_type = self.resolver.resolve(clean_resolve_target or target)
         if not execution_target:
-            msg = f"No encontré una aplicación o sitio para {target}."
+            msg = f"Mmm, no encontré ninguna aplicación o sitio para {target}."
             print(f"[OSExecutor] {msg}")
             self.last_action_message = msg
             return False
@@ -371,34 +483,62 @@ class OSExecutor:
         try:
             if target_type == "url" or execution_target.startswith("http"):
                 webbrowser.open_new_tab(execution_target)
-                self.last_action_message = f"Abriendo {target} en el navegador."
+                self.last_action_message = random.choice([
+                    f"¡Claro! Abriendo {target} en tu navegador.",
+                    f"¡Enseguida! Aquí tienes {target}.",
+                    f"¡Listo! Vamos a {target}."
+                ])
             elif target_type == "protocol" or "://" in execution_target:
                 try:
                     os.startfile(execution_target)
                 except Exception:
                     subprocess.Popen(
-                        f'start "" "{execution_target}"',
-                        shell=True,
+                        ["cmd.exe", "/c", "start", "", execution_target],
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL
                     )
-                self.last_action_message = f"Iniciando {target}."
+                self.last_action_message = random.choice([
+                    f"¡Enseguida! Iniciando {target}.",
+                    f"¡Listo! Abriendo {target} ahora mismo.",
+                    f"¡Claro que sí! Lanzando {target}."
+                ])
             else:
+                actual_exe = execution_target
+                if execution_target.lower().endswith(".lnk"):
+                    try:
+                        import win32com.client
+                        shell = win32com.client.Dispatch("WScript.Shell")
+                        sc = shell.CreateShortCut(execution_target)
+                        if sc.TargetPath and os.path.exists(sc.TargetPath):
+                            actual_exe = sc.TargetPath
+                    except Exception:
+                        pass
+
+                cmd = ["cmd.exe", "/c", "start", "", actual_exe]
+                if is_new_window_request:
+                    cmd.append("--new-window")
                 subprocess.Popen(
-                    f'start "" "{execution_target}"',
-                    shell=True,
+                    cmd,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL
                 )
-                self.last_action_message = f"Abriendo {target}."
+                self.last_action_message = (
+                    f"¡Listo! Abriendo una nueva ventana de {clean_resolve_target or target}."
+                    if is_new_window_request
+                    else random.choice([
+                        f"¡Listo! Abriendo {target}.",
+                        f"¡Enseguida! Aquí tienes {target}.",
+                        f"¡Claro! Iniciando {target}."
+                    ])
+                )
 
             self.resolver.save_learned_command(target, execution_target, target_type)
 
             # Si se solicitó posición de pantalla, esperar a que aparezca la ventana y posicionarla
             if position:
                 import time
-                for _ in range(12):
-                    time.sleep(0.15)
+                for _ in range(14):
+                    time.sleep(0.08)
                     win = self.window_manager.find_window(target_clean)
                     if not win and ("youtube" in target_clean or "navegador" in target_clean or "web" in target_clean or "http" in execution_target):
                         win = self.window_manager.find_browser_window()
@@ -408,27 +548,24 @@ class OSExecutor:
                         pos_label = self.window_manager._position_label(norm_pos)
                         self.last_action_message = f"Abriendo {target} en {pos_label}."
                         break
-            else:
-                # Dar 1.0s a la aplicación para desplegarse en pantalla antes de mapear
-                import time
-                time.sleep(1.0)
 
-            # Mapeo y escaneo del panorama en pantalla en tiempo real
-            screen_context = self.screen_mapper.map_screen_context(action_hint=target)
-            self._announce_context(action_hint=target, user_command=target, ask=False)
-
-            # Obviedad: Si estamos en YouTube o resultados de búsqueda
-            if self.interactive_voice and (screen_context.get("is_youtube") or "youtube" in target.lower()):
-                q_play = "Veo los resultados en pantalla. ¿Deseas que inicie la reproducción del contenido?"
-                answer_play = self._get_dialog().ask_voice(q_play, listen_seconds=10)
-                if answer_play:
-                    ans_clean = answer_play.lower()
-                    if any(w in ans_clean for w in ["si", "sí", "play", "iniciar", "reproducir", "reprodúcelo", "dale"]):
-                        self.screen_mapper.trigger_play_content()
-                        self._speak("Iniciando reproducción.")
-
-            # Consulta por voz de Verificación y Obviedad del Aprendizaje con Pausa Activa
             if self.interactive_voice:
+                import time
+                time.sleep(0.5)
+                screen_context = self.screen_mapper.map_screen_context(action_hint=target)
+                self._announce_context(action_hint=target, user_command=target, ask=False)
+
+                # Obviedad: Si estamos en YouTube o resultados de búsqueda
+                if screen_context.get("is_youtube") or "youtube" in target.lower():
+                    q_play = "Veo los resultados en pantalla. ¿Deseas que inicie la reproducción del contenido?"
+                    answer_play = self._get_dialog().ask_voice(q_play, listen_seconds=10)
+                    if answer_play:
+                        ans_clean = answer_play.lower()
+                        if any(w in ans_clean for w in ["si", "sí", "play", "iniciar", "reproducir", "reprodúcelo", "dale"]):
+                            self.screen_mapper.trigger_play_content()
+                            self._speak("Iniciando reproducción.")
+
+                # Consulta por voz de Verificación y Obviedad del Aprendizaje con Pausa Activa
                 q_verify = f"¿Se ejecutó {target} correctamente como lo esperabas?"
                 answer_verify = self._get_dialog().ask_voice(q_verify, listen_seconds=10)
                 if answer_verify:
@@ -447,7 +584,7 @@ class OSExecutor:
 
     def _voice_consultation_for_project(self, p_name: str, p_type: str) -> tuple[str, str, Path]:
         print("\n==========================================================")
-        print("     [V.ANSHEE 🎙️ - Consulta de Proyecto por Voz]        ")
+        print("     [V.ANSHEE - Consulta de Proyecto por Voz]        ")
         print("==========================================================")
 
         # 1. Lenguaje / Tecnología por VOZ con Pausa Activa
@@ -466,7 +603,7 @@ class OSExecutor:
             final_type = "python"
             self.routine_engine.save_preference("default_project_type", final_type)
 
-        # 2. Ubicación / Carpeta por VOZ con Pausa Activa
+        from src.utils.path_resolver import normalize_user_path, to_portable_path, get_default_projects_dir
         learned_location = self.routine_engine.get_preference("default_project_location")
         target_base = None
         if self.interactive_voice:
@@ -481,25 +618,44 @@ class OSExecutor:
                 else:
                     extracted_path = self._get_dialog().parse_voice_answer("location", q2, answer2)
                     if extracted_path and ("/" in extracted_path or "\\" in extracted_path or ":" in extracted_path):
-                        target_base = Path(extracted_path)
+                        target_base = normalize_user_path(extracted_path)
 
         if not target_base:
-            target_base = Path(learned_location) if learned_location else (Path.home() / "Desktop" / "VANSHEE_Projects")
+            target_base = normalize_user_path(learned_location) if learned_location else get_default_projects_dir()
 
-        self.routine_engine.save_preference("default_project_location", str(target_base))
+        # Asegurar permisos de acceso de forma segura en cualquier equipo
+        try:
+            target_base.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            target_base = get_default_projects_dir()
 
-        # 3. Nombre del proyecto por VOZ con Pausa Activa
+        self.routine_engine.save_preference("default_project_location", to_portable_path(target_base))
+
+        # 3. Nombre del proyecto
         if p_name and p_name != "nuevo_proyecto":
             final_name = p_name
         elif self.interactive_voice:
             q3 = "¿Qué nombre deseas darle al proyecto?"
             answer3 = self._get_dialog().ask_voice(q3, listen_seconds=15)
             extracted_name = self._get_dialog().parse_voice_answer("project_name", q3, answer3)
-            final_name = extracted_name.replace(" ", "_") if extracted_name else "mi_proyecto"
+            final_name = extracted_name.replace(" ", "_") if extracted_name else "nuevo_proyecto"
         else:
-            final_name = "mi_proyecto"
+            final_name = "nuevo_proyecto"
 
-        base_dir = target_base / final_name
+        # Garantizar que sea un proyecto nuevo desde cero (si la carpeta previa no está vacía, crear una numerada nueva)
+        candidate_dir = target_base / final_name
+        if candidate_dir.exists():
+            try:
+                if any(candidate_dir.iterdir()):
+                    counter = 1
+                    while (target_base / f"{final_name}_{counter}").exists() and any((target_base / f"{final_name}_{counter}").iterdir()):
+                        counter += 1
+                    final_name = f"{final_name}_{counter}"
+                    candidate_dir = target_base / final_name
+            except Exception:
+                pass
+
+        base_dir = candidate_dir
         print("==========================================================\n")
         return final_name, final_type, base_dir
 
@@ -507,28 +663,44 @@ class OSExecutor:
         final_name, final_type, base_dir = self._voice_consultation_for_project(p_name, p_type)
         base_dir.mkdir(parents=True, exist_ok=True)
 
-        msg = f"Creando entorno de proyecto {final_name} en formato {final_type}."
+        msg = f"Creando entorno de proyecto {final_name} desde cero."
         print(f"[ProjectCreator] {msg} en: {base_dir}")
-        self._speak(msg)
 
         if final_type == "python":
-            subprocess.run(f"python -m venv \"{base_dir / '.venv'}\"", shell=True)
+            subprocess.run([sys.executable, "-m", "venv", str(base_dir / ".venv")], check=False)
             main_file = base_dir / "main.py"
             if not main_file.exists():
                 main_file.write_text("# Auto-generado por V.ANSHEE\nprint('Proyecto V.ANSHEE listo.')\n", encoding="utf-8")
         elif final_type in ["node", "web"]:
-            subprocess.run("npm init -y", cwd=base_dir, shell=True)
+            npm_cmd = "npm.cmd" if os.name == "nt" else "npm"
+            subprocess.run([npm_cmd, "init", "-y"], cwd=str(base_dir), check=False)
 
-        ide_path, _ = self.resolver.resolve(app_target if app_target else "vscode")
+        target_app = app_target if app_target else "antigravity"
+        ide_path, _ = self.resolver.resolve(target_app)
+        if not ide_path and target_app != "vscode":
+            ide_path, _ = self.resolver.resolve("vscode")
+
         if ide_path:
+            actual_exe = ide_path
+            if ide_path.lower().endswith(".lnk"):
+                try:
+                    import win32com.client
+                    shell = win32com.client.Dispatch("WScript.Shell")
+                    sc = shell.CreateShortCut(ide_path)
+                    if sc.TargetPath and os.path.exists(sc.TargetPath):
+                        actual_exe = sc.TargetPath
+                except Exception:
+                    pass
+
             try:
+                # Forzar apertura en NUEVA VENTANA limpia (--new-window) desde cero
                 subprocess.Popen(
-                    f'start "" "{ide_path}" "{base_dir}"',
-                    shell=True,
+                    ["cmd.exe", "/c", "start", "", actual_exe, "--new-window", str(base_dir)],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL
                 )
-                self._speak("Proyecto creado y cargado en tu editor.")
+                self.last_action_message = f"Proyecto '{final_name}' creado desde cero y abierto en nueva ventana."
+                self._speak(f"Proyecto {final_name} creado desde cero y abierto en una ventana nueva.")
                 return True
             except Exception as e:
                 print(f"[ProjectCreator Error] No se pudo abrir el IDE: {e}")
@@ -543,15 +715,18 @@ class OSExecutor:
         return snapshot.app_name
 
     def _resolve_output_dir(self, requested_path: str = "") -> Path:
+        from src.utils.path_resolver import normalize_user_path, get_default_projects_dir
         if requested_path:
-            path = Path(os.path.expandvars(requested_path)).expanduser()
+            path = normalize_user_path(requested_path)
             if path.suffix:
                 return path.parent
             return path
         learned_location = self.routine_engine.get_preference("default_project_location")
         if learned_location:
-            return Path(learned_location)
-        return Path.home() / "Desktop" / "VANSHEE_Projects"
+            norm = normalize_user_path(learned_location)
+            if norm.exists() or norm.parent.exists():
+                return norm
+        return get_default_projects_dir()
 
     def _create_contextual_folder(self, step: ActionStep) -> bool:
         """Crea una carpeta en Windows y opcionalmente la abre en el Explorador."""
